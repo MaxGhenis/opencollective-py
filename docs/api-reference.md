@@ -108,13 +108,25 @@ result = client.reject_expense("expense_id", message="Invalid receipt")
 Create a new expense (as a draft).
 
 ```python
+# Receipt expense with attachment
 result = client.create_expense(
     collective_slug="policyengine",
     payee_slug="max-ghenis",
-    description="Cloud services",
-    amount_cents=10000,
+    description="GCP Cloud Services - January 2025",
+    amount_cents=15000,
     expense_type="RECEIPT",
-    tags=["cloud"]
+    tags=["cloud", "infrastructure"],
+    attachment_urls=["https://storage.example.com/receipts/gcp-jan-2025.pdf"]
+)
+
+# Invoice expense with invoice file
+result = client.create_expense(
+    collective_slug="policyengine",
+    payee_slug="max-ghenis",
+    description="Consulting services",
+    amount_cents=500000,
+    expense_type="INVOICE",
+    invoice_url="https://storage.example.com/invoices/invoice.pdf"
 )
 ```
 
@@ -125,6 +137,8 @@ result = client.create_expense(
 - `amount_cents` (int): Amount in cents
 - `expense_type` (str, optional): Type (`RECEIPT`, `INVOICE`, etc.)
 - `tags` (list[str], optional): List of tags
+- `attachment_urls` (list[str], optional): URLs for receipt/attachment files
+- `invoice_url` (str, optional): URL for invoice file (for INVOICE type)
 
 **Returns:** Created expense object
 

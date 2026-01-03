@@ -208,6 +208,81 @@ class TestOpenCollectiveClient:
         assert result["status"] == "DRAFT"
 
     @responses.activate
+    def test_create_expense_with_attachments(self):
+        """Can create an expense with file attachments."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp4",
+                        "legacyId": 126,
+                        "description": "GCP Cloud Services",
+                        "amount": 15000,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="GCP Cloud Services",
+            amount_cents=15000,
+            attachment_urls=["https://example.com/receipt.pdf"],
+            tags=["cloud", "infrastructure"],
+        )
+
+        assert result["description"] == "GCP Cloud Services"
+        assert result["status"] == "DRAFT"
+
+        # Verify the request included attachedFiles
+        request_body = responses.calls[0].request.body.decode()
+        assert "attachedFiles" in request_body
+        assert "https://example.com/receipt.pdf" in request_body
+
+    @responses.activate
+    def test_create_invoice_expense(self):
+        """Can create an invoice expense with invoice file."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp5",
+                        "legacyId": 127,
+                        "description": "Consulting services",
+                        "amount": 100000,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="Consulting services",
+            amount_cents=100000,
+            expense_type="INVOICE",
+            invoice_url="https://example.com/invoice.pdf",
+        )
+
+        assert result["description"] == "Consulting services"
+
+        # Verify the request included invoiceFile
+        request_body = responses.calls[0].request.body.decode()
+        assert "invoiceFile" in request_body
+        assert "https://example.com/invoice.pdf" in request_body
+
+    @responses.activate
     def test_api_error_handling(self):
         """Client handles API errors gracefully."""
         responses.add(

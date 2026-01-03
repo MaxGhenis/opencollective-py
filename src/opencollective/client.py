@@ -213,6 +213,8 @@ class OpenCollectiveClient:
         amount_cents: int,
         expense_type: str = "RECEIPT",
         tags: list[str] | None = None,
+        attachment_urls: list[str] | None = None,
+        invoice_url: str | None = None,
     ) -> dict:
         """Create a new expense (as a draft).
 
@@ -223,6 +225,8 @@ class OpenCollectiveClient:
             amount_cents: Amount in cents (e.g., 1000 for $10.00).
             expense_type: Type of expense (RECEIPT, INVOICE, etc.).
             tags: Optional list of tags.
+            attachment_urls: Optional list of URLs for receipt/attachment files.
+            invoice_url: Optional URL for invoice file (for INVOICE type).
 
         Returns:
             Created expense data.
@@ -254,6 +258,10 @@ class OpenCollectiveClient:
         }
         if tags:
             expense_input["tags"] = tags
+        if attachment_urls:
+            expense_input["attachedFiles"] = [{"url": url} for url in attachment_urls]
+        if invoice_url:
+            expense_input["invoiceFile"] = {"url": invoice_url}
 
         variables = {
             "account": {"slug": collective_slug},

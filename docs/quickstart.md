@@ -79,13 +79,25 @@ print(f"New status: {result['status']}")
 # Reject with a message
 result = client.reject_expense("expense_id", message="Missing receipt")
 
-# Create a new expense
+# Create a new expense with receipt attachment
 result = client.create_expense(
     collective_slug="policyengine",
     payee_slug="max-ghenis",
-    description="Cloud services - January 2025",
-    amount_cents=10000,  # $100.00
-    tags=["cloud", "infrastructure"]
+    description="GCP Cloud Services - January 2025",
+    amount_cents=15000,  # $150.00
+    tags=["cloud", "infrastructure"],
+    attachment_urls=["https://storage.example.com/receipts/gcp-jan-2025.pdf"]
+)
+print(f"Created expense {result['id']} with status {result['status']}")
+
+# Create an invoice expense
+result = client.create_expense(
+    collective_slug="policyengine",
+    payee_slug="max-ghenis",
+    description="Consulting services - Q1 2025",
+    amount_cents=500000,  # $5,000.00
+    expense_type="INVOICE",
+    invoice_url="https://storage.example.com/invoices/consulting-q1.pdf"
 )
 ```
 
