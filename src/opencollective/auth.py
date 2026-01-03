@@ -1,0 +1,157 @@
+"""OAuth2 authentication for OpenCollective."""
+
+import json
+import os
+from typing import Optional
+from urllib.parse import urlencode
+
+import requests
+
+
+AUTH_URL = "https://opencollective.com/oauth/authorize"
+TOKEN_URL = "https://opencollective.com/oauth/token"
+DEFAULT_REDIRECT_URI = "http://localhost:8080/callback"
+
+
+class OAuth2Handler:
+    """Handle OAuth2 authentication with OpenCollective."""
+
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        redirect_uri: Optional[str] = None,
+        token_file: Optional[str] = None,
+    ):
+        """Initialize the OAuth2 handler.
+
+        Args:
+            client_id: OAuth2 client ID.
+            client_secret: OAuth2 client secret.
+            redirect_uri: Callback URL for OAuth flow.
+            token_file: Path to store/load tokens.
+        """
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri or DEFAULT_REDIRECT_URI
+        self.token_file = token_file
+
+    def get_authorization_url(self, scope: str = "expenses") -> str:
+        """Get the URL for user authorization.
+
+        Args:
+            scope: OAuth2 scope (e.g., "expenses").
+
+        Returns:
+            URL to redirect user to for authorization.
+        """
+        params = {
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "response_type": "code",
+            "scope": scope,
+        }
+        return f"{AUTH_URL}?{urlencode(params)}"
+
+    def exchange_code(self, code: str) -> dict:
+        """Exchange authorization code for access token.
+
+        Args:
+            code: Authorization code from callback.
+
+        Returns:
+            Token data including access_token, refresh_token, etc.
+
+        Raises:
+            Exception: If token exchange fails.
+        """
+        response = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "code": code,
+                "redirect_uri": self.redirect_uri,
+            },
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error_description", response.text)
+            raise Exception(f"Token exchange failed: {error}")
+
+        token_data = response.json()
+
+        if self.token_file:
+            self.save_token(token_data)
+
+        return token_data
+
+    def refresh_access_token(self, refresh_token: str) -> dict:
+        """Refresh an expired access token.
+
+        Args:
+            refresh_token: The refresh token.
+
+        Returns:
+            New token data.
+
+        Raises:
+            Exception: If refresh fails.
+        """
+        response = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "refresh_token": refresh_token,
+            },
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error_description", response.text)
+            raise Exception(f"Token refresh failed: {error}")
+
+        token_data = response.json()
+
+        if self.token_file:
+            self.save_token(token_data)
+
+        return token_data
+
+    def save_token(self, token_data: dict) -> None:
+        """Save token data to file.
+
+        Args:
+            token_data: Token data to save.
+        """
+        if not self.token_file:
+            return
+
+        os.makedirs(os.path.dirname(self.token_file), exist_ok=True)
+        with open(self.token_file, "w") as f:
+            json.dump(token_data, f)
+
+    def load_token(self) -> Optional[dict]:
+        """Load token data from file.
+
+        Returns:
+            Token data or None if file doesn't exist.
+        """
+        if not self.token_file or not os.path.exists(self.token_file):
+            return None
+
+        with open(self.token_file) as f:
+            return json.load(f)
+
+    def get_access_token(self) -> Optional[str]:
+        """Get the current access token.
+
+        Returns:
+            Access token or None if not available.
+        """
+        token_data = self.load_token()
+        if token_data:
+            return token_data.get("access_token")
+        return None

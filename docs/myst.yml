@@ -1,0 +1,27 @@
+version: 1
+project:
+  title: "opencollective-py"
+  description: "Python client for the OpenCollective GraphQL API"
+  authors:
+    - name: Max Ghenis
+      email: max@maxghenis.com
+  github: https://github.com/MaxGhenis/opencollective-py
+  license: MIT
+  keywords:
+    - opencollective
+    - python
+    - api
+    - graphql
+    - expenses
+    - oauth
+  toc:
+    - file: index.md
+    - file: quickstart.md
+    - file: api-reference.md
+
+site:
+  template: book-theme
+  title: opencollective-py
+  options:
+    logo_text: opencollective-py
+    hide_outline: true
