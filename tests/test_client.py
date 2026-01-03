@@ -67,7 +67,10 @@ class TestOpenCollectiveClient:
                                 "currency": "USD",
                                 "status": "PAID",
                                 "createdAt": "2025-01-01T00:00:00Z",
-                                "payee": {"name": "Max Ghenis", "slug": "max-ghenis"},
+                                "payee": {
+                                    "name": "Max Ghenis",
+                                    "slug": "max-ghenis",
+                                },
                             },
                             {
                                 "id": "exp2",
@@ -77,7 +80,10 @@ class TestOpenCollectiveClient:
                                 "currency": "USD",
                                 "status": "PENDING",
                                 "createdAt": "2025-01-02T00:00:00Z",
-                                "payee": {"name": "Jane Doe", "slug": "jane-doe"},
+                                "payee": {
+                                    "name": "Jane Doe",
+                                    "slug": "jane-doe",
+                                },
                             },
                         ],
                     }
@@ -113,7 +119,10 @@ class TestOpenCollectiveClient:
                                 "currency": "USD",
                                 "status": "PENDING",
                                 "createdAt": "2025-01-02T00:00:00Z",
-                                "payee": {"name": "Jane Doe", "slug": "jane-doe"},
+                                "payee": {
+                                    "name": "Jane Doe",
+                                    "slug": "jane-doe",
+                                },
                             },
                         ],
                     }
@@ -283,6 +292,84 @@ class TestOpenCollectiveClient:
         assert "https://example.com/invoice.pdf" in request_body
 
     @responses.activate
+    def test_get_payout_methods(self):
+        """Can fetch payout methods for an account."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {
+                        "id": "user123",
+                        "slug": "max-ghenis",
+                        "payoutMethods": [
+                            {
+                                "id": "pm_abc123",
+                                "type": "BANK_ACCOUNT",
+                                "name": "Chase ****1234",
+                                "data": {"currency": "USD"},
+                                "isSaved": True,
+                            },
+                            {
+                                "id": "pm_def456",
+                                "type": "PAYPAL",
+                                "name": "PayPal",
+                                "data": {"email": "max@example.com"},
+                                "isSaved": True,
+                            },
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        methods = client.get_payout_methods("max-ghenis")
+
+        assert len(methods) == 2
+        assert methods[0]["id"] == "pm_abc123"
+        assert methods[0]["type"] == "BANK_ACCOUNT"
+        assert methods[1]["type"] == "PAYPAL"
+
+    @responses.activate
+    def test_create_expense_with_payout_method(self):
+        """Can create expense with payout method."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp6",
+                        "legacyId": 128,
+                        "description": "Cloud services",
+                        "amount": 10000,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="Cloud services",
+            amount_cents=10000,
+            payout_method_id="pm_abc123",
+        )
+
+        assert result["description"] == "Cloud services"
+        assert result["status"] == "DRAFT"
+
+        # Verify the request included payoutMethod
+        request_body = responses.calls[0].request.body.decode()
+        assert "payoutMethod" in request_body
+        assert "pm_abc123" in request_body
+
+    @responses.activate
     def test_api_error_handling(self):
         """Client handles API errors gracefully."""
         responses.add(
@@ -290,7 +377,10 @@ class TestOpenCollectiveClient:
             API_URL,
             json={
                 "errors": [
-                    {"message": "Unauthorized", "extensions": {"code": "UNAUTHORIZED"}}
+                    {
+                        "message": "Unauthorized",
+                        "extensions": {"code": "UNAUTHORIZED"},
+                    }
                 ]
             },
             status=200,

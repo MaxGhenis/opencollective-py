@@ -103,17 +103,39 @@ result = client.reject_expense("expense_id", message="Invalid receipt")
 
 ---
 
+#### get_payout_methods
+
+Get payout methods for an account. Use this to find the payout method ID required for creating expenses.
+
+```python
+methods = client.get_payout_methods("max-ghenis")
+for method in methods:
+    print(f"{method['id']}: {method['type']} - {method['name']}")
+```
+
+**Parameters:**
+- `account_slug` (str): The account's slug (your user slug)
+
+**Returns:** List of payout method objects with `id`, `type`, `name`, `data`, `isSaved`
+
+---
+
 #### create_expense
 
 Create a new expense (as a draft).
 
 ```python
+# First, get your payout methods
+methods = client.get_payout_methods("max-ghenis")
+payout_method_id = methods[0]["id"]  # Use your preferred payout method
+
 # Receipt expense with attachment
 result = client.create_expense(
     collective_slug="policyengine",
     payee_slug="max-ghenis",
     description="GCP Cloud Services - January 2025",
     amount_cents=15000,
+    payout_method_id=payout_method_id,
     expense_type="RECEIPT",
     tags=["cloud", "infrastructure"],
     attachment_urls=["https://storage.example.com/receipts/gcp-jan-2025.pdf"]
@@ -125,6 +147,7 @@ result = client.create_expense(
     payee_slug="max-ghenis",
     description="Consulting services",
     amount_cents=500000,
+    payout_method_id=payout_method_id,
     expense_type="INVOICE",
     invoice_url="https://storage.example.com/invoices/invoice.pdf"
 )
@@ -135,6 +158,7 @@ result = client.create_expense(
 - `payee_slug` (str): The payee's slug
 - `description` (str): Expense description
 - `amount_cents` (int): Amount in cents
+- `payout_method_id` (str, optional): ID of the payout method (use `get_payout_methods()` to find)
 - `expense_type` (str, optional): Type (`RECEIPT`, `INVOICE`, etc.)
 - `tags` (list[str], optional): List of tags
 - `attachment_urls` (list[str], optional): URLs for receipt/attachment files

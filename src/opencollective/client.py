@@ -156,7 +156,9 @@ class OpenCollectiveClient:
         """
         return self._process_expense(expense_id, "APPROVE")
 
-    def reject_expense(self, expense_id: str, message: str | None = None) -> dict:
+    def reject_expense(
+        self, expense_id: str, message: str | None = None
+    ) -> dict:
         """Reject a pending expense.
 
         Args:
@@ -205,12 +207,41 @@ class OpenCollectiveClient:
         data = self._request(mutation, variables)
         return data.get("processExpense", {})
 
+    def get_payout_methods(self, account_slug: str) -> list[dict]:
+        """Get payout methods for an account.
+
+        Args:
+            account_slug: The account's slug (e.g., your user slug).
+
+        Returns:
+            List of payout method objects with id, type, name, data.
+        """
+        query = """
+        query GetPayoutMethods($slug: String!) {
+            account(slug: $slug) {
+                id
+                slug
+                payoutMethods {
+                    id
+                    type
+                    name
+                    data
+                    isSaved
+                }
+            }
+        }
+        """
+        data = self._request(query, {"slug": account_slug})
+        account = data.get("account", {})
+        return account.get("payoutMethods", [])
+
     def create_expense(
         self,
         collective_slug: str,
         payee_slug: str,
         description: str,
         amount_cents: int,
+        payout_method_id: str | None = None,
         expense_type: str = "RECEIPT",
         tags: list[str] | None = None,
         attachment_urls: list[str] | None = None,
@@ -223,6 +254,8 @@ class OpenCollectiveClient:
             payee_slug: The payee's slug.
             description: Description of the expense.
             amount_cents: Amount in cents (e.g., 1000 for $10.00).
+            payout_method_id: ID of the payout method to use (required).
+                Use get_payout_methods() to find available methods.
             expense_type: Type of expense (RECEIPT, INVOICE, etc.).
             tags: Optional list of tags.
             attachment_urls: Optional list of URLs for receipt/attachment files.
@@ -256,10 +289,14 @@ class OpenCollectiveClient:
                 }
             ],
         }
+        if payout_method_id:
+            expense_input["payoutMethod"] = {"id": payout_method_id}
         if tags:
             expense_input["tags"] = tags
         if attachment_urls:
-            expense_input["attachedFiles"] = [{"url": url} for url in attachment_urls]
+            expense_input["attachedFiles"] = [
+                {"url": url} for url in attachment_urls
+            ]
         if invoice_url:
             expense_input["invoiceFile"] = {"url": invoice_url}
 
@@ -280,7 +317,9 @@ class OpenCollectiveClient:
         Returns:
             List of pending expenses.
         """
-        result = self.get_expenses(collective_slug, status="PENDING", limit=100)
+        result = self.get_expenses(
+            collective_slug, status="PENDING", limit=100
+        )
         return result.get("nodes", [])
 
     def get_my_expenses(
