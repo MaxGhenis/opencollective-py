@@ -2,11 +2,9 @@
 
 import json
 import os
-from typing import Optional
 from urllib.parse import urlencode
 
 import requests
-
 
 AUTH_URL = "https://opencollective.com/oauth/authorize"
 TOKEN_URL = "https://opencollective.com/oauth/token"
@@ -20,8 +18,8 @@ class OAuth2Handler:
         self,
         client_id: str,
         client_secret: str,
-        redirect_uri: Optional[str] = None,
-        token_file: Optional[str] = None,
+        redirect_uri: str | None = None,
+        token_file: str | None = None,
     ):
         """Initialize the OAuth2 handler.
 
@@ -133,7 +131,7 @@ class OAuth2Handler:
         with open(self.token_file, "w") as f:
             json.dump(token_data, f)
 
-    def load_token(self) -> Optional[dict]:
+    def load_token(self) -> dict | None:
         """Load token data from file.
 
         Returns:
@@ -145,7 +143,7 @@ class OAuth2Handler:
         with open(self.token_file) as f:
             return json.load(f)
 
-    def get_access_token(self) -> Optional[str]:
+    def get_access_token(self) -> str | None:
         """Get the current access token.
 
         Returns:

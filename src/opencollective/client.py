@@ -1,8 +1,8 @@
 """OpenCollective API client."""
 
-from typing import Any, Optional
-import requests
+from typing import Any
 
+import requests
 
 API_URL = "https://api.opencollective.com/graphql/v2"
 
@@ -10,7 +10,7 @@ API_URL = "https://api.opencollective.com/graphql/v2"
 class OpenCollectiveClient:
     """Client for interacting with the OpenCollective GraphQL API."""
 
-    def __init__(self, access_token: Optional[str] = None):
+    def __init__(self, access_token: str | None = None):
         """Initialize the client.
 
         Args:
@@ -85,8 +85,8 @@ class OpenCollectiveClient:
         collective_slug: str,
         limit: int = 50,
         offset: int = 0,
-        status: Optional[str] = None,
-        date_from: Optional[str] = None,
+        status: str | None = None,
+        date_from: str | None = None,
     ) -> dict:
         """Get expenses for a collective.
 
@@ -156,7 +156,7 @@ class OpenCollectiveClient:
         """
         return self._process_expense(expense_id, "APPROVE")
 
-    def reject_expense(self, expense_id: str, message: Optional[str] = None) -> dict:
+    def reject_expense(self, expense_id: str, message: str | None = None) -> dict:
         """Reject a pending expense.
 
         Args:
@@ -169,7 +169,7 @@ class OpenCollectiveClient:
         return self._process_expense(expense_id, "REJECT", message)
 
     def _process_expense(
-        self, expense_id: str, action: str, message: Optional[str] = None
+        self, expense_id: str, action: str, message: str | None = None
     ) -> dict:
         """Process an expense (approve, reject, etc.).
 
@@ -212,7 +212,7 @@ class OpenCollectiveClient:
         description: str,
         amount_cents: int,
         expense_type: str = "RECEIPT",
-        tags: Optional[list[str]] = None,
+        tags: list[str] | None = None,
     ) -> dict:
         """Create a new expense (as a draft).
 

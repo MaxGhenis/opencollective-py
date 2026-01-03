@@ -2,8 +2,8 @@
 
 import pytest
 import responses
-from opencollective import OpenCollectiveClient
 
+from opencollective import OpenCollectiveClient
 
 API_URL = "https://api.opencollective.com/graphql/v2"
 

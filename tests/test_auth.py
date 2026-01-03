@@ -1,12 +1,12 @@
 """Tests for OAuth2 authentication."""
 
-import json
 import os
 import tempfile
+
 import pytest
 import responses
-from opencollective import OAuth2Handler
 
+from opencollective import OAuth2Handler
 
 TOKEN_URL = "https://opencollective.com/oauth/token"
 
