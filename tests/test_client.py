@@ -9,7 +9,9 @@ import responses
 from opencollective import OpenCollectiveClient
 
 API_URL = "https://api.opencollective.com/graphql/v2"
-UPLOAD_URL = "https://api.opencollective.com/images"
+# File uploads use frontend proxy due to infrastructure issues with direct API
+# See: https://github.com/opencollective/opencollective-api/issues/11293
+UPLOAD_URL = "https://opencollective.com/api/graphql/v2"
 
 
 class TestOpenCollectiveClient:
@@ -420,8 +422,17 @@ class TestUploadFile:
             responses.POST,
             UPLOAD_URL,
             json={
-                "status": 200,
-                "url": "https://opencollective.com/api/files/abc123",
+                "data": {
+                    "uploadFile": {
+                        "file": {
+                            "id": "file-abc123",
+                            "url": "https://opencollective-production.s3.us-west-1.amazonaws.com/abc123.pdf",
+                            "name": "test.pdf",
+                            "type": "application/pdf",
+                            "size": 16,
+                        }
+                    }
+                }
             },
             status=200,
         )
@@ -435,13 +446,12 @@ class TestUploadFile:
 
         try:
             result = client.upload_file(temp_path)
-            assert (
-                result["url"] == "https://opencollective.com/api/files/abc123"
-            )
+            assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/abc123.pdf"
+            assert result["id"] == "file-abc123"
 
-            # Verify request included kind field
+            # Verify request follows GraphQL multipart spec
             request = responses.calls[0].request
-            assert b"kind" in request.body
+            assert b"operations" in request.body
             assert b"EXPENSE_ATTACHED_FILE" in request.body
         finally:
             import os
@@ -455,8 +465,17 @@ class TestUploadFile:
             responses.POST,
             UPLOAD_URL,
             json={
-                "status": 200,
-                "url": "https://opencollective.com/api/files/def456",
+                "data": {
+                    "uploadFile": {
+                        "file": {
+                            "id": "file-def456",
+                            "url": "https://opencollective-production.s3.us-west-1.amazonaws.com/def456.png",
+                            "name": "receipt.png",
+                            "type": "image/png",
+                            "size": 18,
+                        }
+                    }
+                }
             },
             status=200,
         )
@@ -468,7 +487,8 @@ class TestUploadFile:
             file_obj, filename="receipt.png", kind="EXPENSE_ITEM"
         )
 
-        assert result["url"] == "https://opencollective.com/api/files/def456"
+        assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/def456.png"
+        assert result["name"] == "receipt.png"
 
         # Verify request included correct kind
         request = responses.calls[0].request
@@ -481,8 +501,17 @@ class TestUploadFile:
             responses.POST,
             UPLOAD_URL,
             json={
-                "status": 200,
-                "url": "https://opencollective.com/api/files/ghi789",
+                "data": {
+                    "uploadFile": {
+                        "file": {
+                            "id": "file-ghi789",
+                            "url": "https://opencollective-production.s3.us-west-1.amazonaws.com/ghi789.pdf",
+                            "name": "invoice.pdf",
+                            "type": "application/pdf",
+                            "size": 20,
+                        }
+                    }
+                }
             },
             status=200,
         )
@@ -496,9 +525,7 @@ class TestUploadFile:
 
         try:
             result = client.upload_file(temp_path, kind="EXPENSE_INVOICE")
-            assert (
-                result["url"] == "https://opencollective.com/api/files/ghi789"
-            )
+            assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/ghi789.pdf"
 
             # Verify request included correct kind
             request = responses.calls[0].request
@@ -522,19 +549,21 @@ class TestUploadFile:
             responses.POST,
             UPLOAD_URL,
             json={
-                "error": {
-                    "code": 400,
-                    "message": "Invalid file type",
-                }
+                "errors": [
+                    {
+                        "message": "Invalid file type",
+                        "extensions": {"code": "BAD_REQUEST"}
+                    }
+                ]
             },
-            status=400,
+            status=200,  # GraphQL returns 200 with errors array
         )
 
         client = OpenCollectiveClient(access_token="test_token")
 
         file_obj = BytesIO(b"test content")
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid file type"):
             client.upload_file(file_obj, filename="test.txt")
 
     @responses.activate
@@ -544,8 +573,17 @@ class TestUploadFile:
             responses.POST,
             UPLOAD_URL,
             json={
-                "status": 200,
-                "url": "https://opencollective.com/api/files/mime123",
+                "data": {
+                    "uploadFile": {
+                        "file": {
+                            "id": "file-mime123",
+                            "url": "https://opencollective-production.s3.us-west-1.amazonaws.com/mime123.png",
+                            "name": "image.png",
+                            "type": "image/png",
+                            "size": 16,
+                        }
+                    }
+                }
             },
             status=200,
         )
@@ -554,10 +592,13 @@ class TestUploadFile:
 
         # Test PNG file
         file_obj = BytesIO(b"fake png content")
-        client.upload_file(file_obj, filename="image.png")
+        result = client.upload_file(file_obj, filename="image.png")
 
-        # Check MIME type in request
+        # Verify file info returned correctly
+        assert result["type"] == "image/png"
+        assert result["name"] == "image.png"
+
+        # Check MIME type in request body
         request = responses.calls[0].request
         # The Content-Type header for multipart should contain image/png
-        # since that's what we specified for the file
-        assert b"image.png" in request.body
+        assert b"image/png" in request.body

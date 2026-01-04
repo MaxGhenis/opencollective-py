@@ -1,5 +1,6 @@
 """OpenCollective API client."""
 
+import json
 import mimetypes
 import os
 from typing import Any, BinaryIO
@@ -7,6 +8,10 @@ from typing import Any, BinaryIO
 import requests
 
 API_URL = "https://api.opencollective.com/graphql/v2"
+# File uploads must go through the frontend proxy due to infrastructure issues
+# with multipart handling on the direct API endpoint.
+# See: https://github.com/opencollective/opencollective-api/issues/11293
+UPLOAD_API_URL = "https://opencollective.com/api/graphql/v2"
 
 
 class OpenCollectiveClient:
@@ -67,7 +72,8 @@ class OpenCollectiveClient:
     ) -> dict:
         """Upload a file to OpenCollective.
 
-        Uses the REST /images endpoint for file uploads.
+        Uses GraphQL multipart upload via the frontend proxy endpoint.
+        See: https://github.com/opencollective/opencollective-api/issues/11293
 
         Args:
             file: File path (str) or file-like object (BinaryIO).
@@ -76,15 +82,13 @@ class OpenCollectiveClient:
                 EXPENSE_INVOICE, ACCOUNT_AVATAR, etc.
 
         Returns:
-            Dict with file info including 'url'.
+            Dict with file info including 'url', 'id', 'name', 'size', 'type'.
 
         Example:
             >>> file_info = client.upload_file("/path/to/receipt.pdf")
             >>> print(file_info["url"])
-            https://opencollective.com/api/files/...
+            https://opencollective-production.s3.us-west-1.amazonaws.com/...
         """
-        upload_url = "https://api.opencollective.com/images"
-
         # Handle file path or file-like object
         if isinstance(file, str):
             if not os.path.exists(file):
@@ -103,26 +107,62 @@ class OpenCollectiveClient:
             if mime_type is None:
                 mime_type = "application/octet-stream"
 
-            files = {
-                "file": (filename, file_obj, mime_type),
+            # GraphQL multipart request spec:
+            # https://github.com/jaydenseric/graphql-multipart-request-spec
+            mutation = """
+            mutation UploadFile($files: [UploadFileInput!]!) {
+                uploadFile(files: $files) {
+                    file {
+                        id
+                        url
+                        name
+                        type
+                        size
+                    }
+                }
             }
+            """
 
-            data = {
-                "kind": kind,
+            operations = json.dumps({
+                "query": mutation,
+                "variables": {
+                    "files": [{"kind": kind, "file": None}]
+                }
+            })
+
+            # Map tells server which variable path the file corresponds to
+            file_map = json.dumps({"0": ["variables.files.0.file"]})
+
+            # Build multipart form data
+            files = {
+                "operations": (None, operations, "application/json"),
+                "map": (None, file_map, "application/json"),
+                "0": (filename, file_obj, mime_type),
             }
 
             headers = {"Authorization": f"Bearer {self.access_token}"}
             response = requests.post(
-                upload_url, files=files, data=data, headers=headers
+                UPLOAD_API_URL, files=files, headers=headers
             )
             response.raise_for_status()
 
             result = response.json()
-            if "error" in result:
-                msg = result["error"].get("message", "Unknown error")
+            if "errors" in result:
+                errors = result["errors"]
+                msg = errors[0].get("message", "Unknown error")
                 raise Exception(f"Upload error: {msg}")
 
-            return {"url": result.get("url")}
+            data = result.get("data", {})
+            upload_result = data.get("uploadFile", {})
+            file_info = upload_result.get("file", {})
+
+            return {
+                "url": file_info.get("url"),
+                "id": file_info.get("id"),
+                "name": file_info.get("name"),
+                "type": file_info.get("type"),
+                "size": file_info.get("size"),
+            }
 
         finally:
             if should_close:
