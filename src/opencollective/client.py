@@ -1,6 +1,8 @@
 """OpenCollective API client."""
 
-from typing import Any
+import mimetypes
+import os
+from typing import Any, BinaryIO
 
 import requests
 
@@ -56,6 +58,75 @@ class OpenCollectiveClient:
             raise Exception(f"API error: {msg}")
 
         return result.get("data", {})
+
+    def upload_file(
+        self,
+        file: str | BinaryIO,
+        filename: str | None = None,
+        kind: str = "EXPENSE_ATTACHED_FILE",
+    ) -> dict:
+        """Upload a file to OpenCollective.
+
+        Uses the REST /images endpoint for file uploads.
+
+        Args:
+            file: File path (str) or file-like object (BinaryIO).
+            filename: Optional filename (inferred from path if not provided).
+            kind: File kind - EXPENSE_ATTACHED_FILE, EXPENSE_ITEM,
+                EXPENSE_INVOICE, ACCOUNT_AVATAR, etc.
+
+        Returns:
+            Dict with file info including 'url'.
+
+        Example:
+            >>> file_info = client.upload_file("/path/to/receipt.pdf")
+            >>> print(file_info["url"])
+            https://opencollective.com/api/files/...
+        """
+        upload_url = "https://api.opencollective.com/images"
+
+        # Handle file path or file-like object
+        if isinstance(file, str):
+            if not os.path.exists(file):
+                raise FileNotFoundError(f"File not found: {file}")
+            filename = filename or os.path.basename(file)
+            file_obj = open(file, "rb")
+            should_close = True
+        else:
+            file_obj = file
+            filename = filename or getattr(file, "name", "upload")
+            should_close = False
+
+        try:
+            # Determine MIME type from filename
+            mime_type, _ = mimetypes.guess_type(filename)
+            if mime_type is None:
+                mime_type = "application/octet-stream"
+
+            files = {
+                "file": (filename, file_obj, mime_type),
+            }
+
+            data = {
+                "kind": kind,
+            }
+
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.post(
+                upload_url, files=files, data=data, headers=headers
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            if "error" in result:
+                msg = result["error"].get("message", "Unknown error")
+                raise Exception(f"Upload error: {msg}")
+
+            return {"url": result.get("url")}
+
+        finally:
+            if should_close:
+                file_obj.close()
 
     def get_collective(self, slug: str) -> dict:
         """Get information about a collective.

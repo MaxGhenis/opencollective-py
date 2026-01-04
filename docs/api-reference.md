@@ -120,6 +120,35 @@ for method in methods:
 
 ---
 
+#### upload_file
+
+Upload a file to OpenCollective. Use this to upload receipts or invoices before creating an expense.
+
+```python
+# Upload from file path
+file_info = client.upload_file("/path/to/receipt.pdf")
+print(file_info["url"])  # URL to use in create_expense
+
+# Upload from file object
+with open("/path/to/invoice.pdf", "rb") as f:
+    file_info = client.upload_file(f, filename="invoice.pdf")
+
+# Upload with specific file kind
+file_info = client.upload_file("/path/to/invoice.pdf", kind="EXPENSE_INVOICE")
+```
+
+**Parameters:**
+- `file` (str | BinaryIO): File path or file-like object
+- `filename` (str, optional): Filename (inferred from path if not provided)
+- `kind` (str, optional): File kind (default: `EXPENSE_ATTACHED_FILE`)
+  - `EXPENSE_ATTACHED_FILE` - General expense attachment
+  - `EXPENSE_ITEM` - Line item receipt
+  - `EXPENSE_INVOICE` - Invoice file
+
+**Returns:** Dict with `url` - the URL to use in `create_expense()`
+
+---
+
 #### create_expense
 
 Create a new expense (as a draft).

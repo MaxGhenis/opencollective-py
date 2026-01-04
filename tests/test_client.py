@@ -1,11 +1,15 @@
 """Tests for OpenCollective client."""
 
+import tempfile
+from io import BytesIO
+
 import pytest
 import responses
 
 from opencollective import OpenCollectiveClient
 
 API_URL = "https://api.opencollective.com/graphql/v2"
+UPLOAD_URL = "https://api.opencollective.com/images"
 
 
 class TestOpenCollectiveClient:
@@ -404,3 +408,156 @@ class TestOpenCollectiveClient:
 
         with pytest.raises(Exception):
             client.get_collective("policyengine")
+
+
+class TestUploadFile:
+    """Tests for file upload functionality."""
+
+    @responses.activate
+    def test_upload_file_from_path(self):
+        """Can upload a file from a file path."""
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "status": 200,
+                "url": "https://opencollective.com/api/files/abc123",
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        # Create a temporary file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"test pdf content")
+            temp_path = f.name
+
+        try:
+            result = client.upload_file(temp_path)
+            assert (
+                result["url"] == "https://opencollective.com/api/files/abc123"
+            )
+
+            # Verify request included kind field
+            request = responses.calls[0].request
+            assert b"kind" in request.body
+            assert b"EXPENSE_ATTACHED_FILE" in request.body
+        finally:
+            import os
+
+            os.unlink(temp_path)
+
+    @responses.activate
+    def test_upload_file_from_file_object(self):
+        """Can upload a file from a file-like object."""
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "status": 200,
+                "url": "https://opencollective.com/api/files/def456",
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        file_obj = BytesIO(b"test image content")
+        result = client.upload_file(
+            file_obj, filename="receipt.png", kind="EXPENSE_ITEM"
+        )
+
+        assert result["url"] == "https://opencollective.com/api/files/def456"
+
+        # Verify request included correct kind
+        request = responses.calls[0].request
+        assert b"EXPENSE_ITEM" in request.body
+
+    @responses.activate
+    def test_upload_file_with_custom_kind(self):
+        """Can upload a file with custom file kind."""
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "status": 200,
+                "url": "https://opencollective.com/api/files/ghi789",
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        # Create a temporary file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"test invoice content")
+            temp_path = f.name
+
+        try:
+            result = client.upload_file(temp_path, kind="EXPENSE_INVOICE")
+            assert (
+                result["url"] == "https://opencollective.com/api/files/ghi789"
+            )
+
+            # Verify request included correct kind
+            request = responses.calls[0].request
+            assert b"EXPENSE_INVOICE" in request.body
+        finally:
+            import os
+
+            os.unlink(temp_path)
+
+    def test_upload_file_not_found(self):
+        """Raises FileNotFoundError for nonexistent file."""
+        client = OpenCollectiveClient(access_token="test_token")
+
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            client.upload_file("/nonexistent/path/to/file.pdf")
+
+    @responses.activate
+    def test_upload_file_api_error(self):
+        """Handles API error responses."""
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "error": {
+                    "code": 400,
+                    "message": "Invalid file type",
+                }
+            },
+            status=400,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        file_obj = BytesIO(b"test content")
+
+        with pytest.raises(Exception):
+            client.upload_file(file_obj, filename="test.txt")
+
+    @responses.activate
+    def test_upload_file_mime_type_detection(self):
+        """Correctly detects MIME type from filename."""
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "status": 200,
+                "url": "https://opencollective.com/api/files/mime123",
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        # Test PNG file
+        file_obj = BytesIO(b"fake png content")
+        client.upload_file(file_obj, filename="image.png")
+
+        # Check MIME type in request
+        request = responses.calls[0].request
+        # The Content-Type header for multipart should contain image/png
+        # since that's what we specified for the file
+        assert b"image.png" in request.body
