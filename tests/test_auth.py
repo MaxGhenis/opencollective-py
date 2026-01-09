@@ -104,9 +104,7 @@ class TestOAuth2Handler:
 
     def test_save_and_load_token(self):
         """Handler can save and load tokens from file."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             token_file = f.name
 
         try:

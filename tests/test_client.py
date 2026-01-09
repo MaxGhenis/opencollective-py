@@ -446,7 +446,10 @@ class TestUploadFile:
 
         try:
             result = client.upload_file(temp_path)
-            assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/abc123.pdf"
+            assert (
+                result["url"]
+                == "https://opencollective-production.s3.us-west-1.amazonaws.com/abc123.pdf"
+            )
             assert result["id"] == "file-abc123"
 
             # Verify request follows GraphQL multipart spec
@@ -487,7 +490,10 @@ class TestUploadFile:
             file_obj, filename="receipt.png", kind="EXPENSE_ITEM"
         )
 
-        assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/def456.png"
+        assert (
+            result["url"]
+            == "https://opencollective-production.s3.us-west-1.amazonaws.com/def456.png"
+        )
         assert result["name"] == "receipt.png"
 
         # Verify request included correct kind
@@ -525,7 +531,10 @@ class TestUploadFile:
 
         try:
             result = client.upload_file(temp_path, kind="EXPENSE_INVOICE")
-            assert result["url"] == "https://opencollective-production.s3.us-west-1.amazonaws.com/ghi789.pdf"
+            assert (
+                result["url"]
+                == "https://opencollective-production.s3.us-west-1.amazonaws.com/ghi789.pdf"
+            )
 
             # Verify request included correct kind
             request = responses.calls[0].request
@@ -552,7 +561,7 @@ class TestUploadFile:
                 "errors": [
                     {
                         "message": "Invalid file type",
-                        "extensions": {"code": "BAD_REQUEST"}
+                        "extensions": {"code": "BAD_REQUEST"},
                     }
                 ]
             },

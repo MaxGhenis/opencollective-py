@@ -123,12 +123,12 @@ class OpenCollectiveClient:
             }
             """
 
-            operations = json.dumps({
-                "query": mutation,
-                "variables": {
-                    "files": [{"kind": kind, "file": None}]
+            operations = json.dumps(
+                {
+                    "query": mutation,
+                    "variables": {"files": [{"kind": kind, "file": None}]},
                 }
-            })
+            )
 
             # Map tells server which variable path the file corresponds to
             file_map = json.dumps({"0": ["variables.files.0.file"]})
@@ -141,9 +141,7 @@ class OpenCollectiveClient:
             }
 
             headers = {"Authorization": f"Bearer {self.access_token}"}
-            response = requests.post(
-                UPLOAD_API_URL, files=files, headers=headers
-            )
+            response = requests.post(UPLOAD_API_URL, files=files, headers=headers)
             response.raise_for_status()
 
             result = response.json()
@@ -267,9 +265,7 @@ class OpenCollectiveClient:
         """
         return self._process_expense(expense_id, "APPROVE")
 
-    def reject_expense(
-        self, expense_id: str, message: str | None = None
-    ) -> dict:
+    def reject_expense(self, expense_id: str, message: str | None = None) -> dict:
         """Reject a pending expense.
 
         Args:
@@ -405,9 +401,7 @@ class OpenCollectiveClient:
         if tags:
             expense_input["tags"] = tags
         if attachment_urls:
-            expense_input["attachedFiles"] = [
-                {"url": url} for url in attachment_urls
-            ]
+            expense_input["attachedFiles"] = [{"url": url} for url in attachment_urls]
         if invoice_url:
             expense_input["invoiceFile"] = {"url": invoice_url}
 
@@ -428,9 +422,7 @@ class OpenCollectiveClient:
         Returns:
             List of pending expenses.
         """
-        result = self.get_expenses(
-            collective_slug, status="PENDING", limit=100
-        )
+        result = self.get_expenses(collective_slug, status="PENDING", limit=100)
         return result.get("nodes", [])
 
     def get_my_expenses(
