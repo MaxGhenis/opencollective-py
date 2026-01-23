@@ -180,6 +180,45 @@ def delete(expense_id: str):
 
 
 @cli.command()
+@click.argument("expense_id")
+def approve(expense_id: str):
+    """Approve a pending expense (requires admin permissions).
+
+    Example:
+        oc approve abc123-def456
+    """
+    client = get_client()
+
+    try:
+        result = client.approve_expense(expense_id)
+        click.echo(f"✓ Approved expense #{result.get('legacyId')}")
+        click.echo(f"  Status: {result.get('status')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("expense_id")
+@click.option("-m", "--message", help="Rejection message")
+def reject(expense_id: str, message: str | None):
+    """Reject a pending expense (requires admin permissions).
+
+    Example:
+        oc reject abc123-def456 -m "Missing receipt"
+    """
+    client = get_client()
+
+    try:
+        result = client.reject_expense(expense_id, message=message)
+        click.echo(f"✓ Rejected expense #{result.get('legacyId')}")
+        click.echo(f"  Status: {result.get('status')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
 def me():
     """Show current authenticated user."""
     client = get_client()

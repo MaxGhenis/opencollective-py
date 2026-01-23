@@ -154,6 +154,38 @@ def create_server() -> "Server":
                 },
             ),
             Tool(
+                name="approve_expense",
+                description="Approve a pending expense (requires admin permissions).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "expense_id": {
+                            "type": "string",
+                            "description": "The expense ID to approve",
+                        },
+                    },
+                    "required": ["expense_id"],
+                },
+            ),
+            Tool(
+                name="reject_expense",
+                description="Reject a pending expense (requires admin permissions).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "expense_id": {
+                            "type": "string",
+                            "description": "The expense ID to reject",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Optional rejection message",
+                        },
+                    },
+                    "required": ["expense_id"],
+                },
+            ),
+            Tool(
                 name="get_me",
                 description="Get the current authenticated OpenCollective user.",
                 inputSchema={
@@ -255,6 +287,29 @@ def create_server() -> "Server":
                     TextContent(
                         type="text",
                         text=f"✓ Deleted expense #{result.get('legacyId')}",
+                    )
+                ]
+
+            elif name == "approve_expense":
+                result = client.approve_expense(arguments["expense_id"])
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"✓ Approved expense #{result.get('legacyId')}\n"
+                        f"  Status: {result.get('status')}",
+                    )
+                ]
+
+            elif name == "reject_expense":
+                result = client.reject_expense(
+                    arguments["expense_id"],
+                    message=arguments.get("message"),
+                )
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"✓ Rejected expense #{result.get('legacyId')}\n"
+                        f"  Status: {result.get('status')}",
                     )
                 ]
 
