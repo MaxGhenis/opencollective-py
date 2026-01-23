@@ -3,9 +3,18 @@
 import json
 import mimetypes
 import os
+import tempfile
 from typing import Any, BinaryIO
 
 import requests
+
+# Optional PDF conversion
+try:
+    from weasyprint import HTML as WeasyHTML
+
+    HAS_WEASYPRINT = True
+except ImportError:
+    HAS_WEASYPRINT = False
 
 API_URL = "https://api.opencollective.com/graphql/v2"
 # File uploads must go through the frontend proxy due to infrastructure issues
@@ -151,8 +160,12 @@ class OpenCollectiveClient:
                 raise Exception(f"Upload error: {msg}")
 
             data = result.get("data", {})
-            upload_result = data.get("uploadFile", {})
-            file_info = upload_result.get("file", {})
+            upload_result = data.get("uploadFile", [])
+            # uploadFile returns a list since mutation accepts multiple files
+            if isinstance(upload_result, list) and len(upload_result) > 0:
+                file_info = upload_result[0].get("file", {})
+            else:
+                file_info = upload_result.get("file", {}) if upload_result else {}
 
             return {
                 "url": file_info.get("url"),
@@ -444,3 +457,262 @@ class OpenCollectiveClient:
             for e in result.get("nodes", [])
             if e.get("payee", {}).get("slug") == payee_slug
         ]
+
+    def get_me(self) -> dict:
+        """Get the current authenticated user's account info.
+
+        Returns:
+            Dict with id, slug, name of the current user.
+        """
+        query = """
+        query {
+            me {
+                id
+                slug
+                name
+            }
+        }
+        """
+        data = self._request(query)
+        return data.get("me", {})
+
+    def delete_expense(self, expense_id: str) -> dict:
+        """Delete an expense (only works for DRAFT or PENDING expenses you created).
+
+        Args:
+            expense_id: The expense ID (not legacy ID).
+
+        Returns:
+            Dict with id and legacyId of deleted expense.
+        """
+        mutation = """
+        mutation DeleteExpense($expense: ExpenseReferenceInput!) {
+            deleteExpense(expense: $expense) {
+                id
+                legacyId
+            }
+        }
+        """
+        data = self._request(mutation, {"expense": {"id": expense_id}})
+        return data.get("deleteExpense", {})
+
+    def _convert_html_to_pdf(self, html_path: str) -> str:
+        """Convert an HTML file to PDF.
+
+        Args:
+            html_path: Path to HTML file.
+
+        Returns:
+            Path to generated PDF file.
+
+        Raises:
+            ImportError: If weasyprint is not installed.
+        """
+        if not HAS_WEASYPRINT:
+            raise ImportError(
+                "weasyprint is required for HTML to PDF conversion. "
+                "Install with: pip install opencollective[pdf]"
+            )
+
+        pdf_path = tempfile.mktemp(suffix=".pdf")
+        WeasyHTML(filename=html_path).write_pdf(pdf_path)
+        return pdf_path
+
+    def submit_reimbursement(
+        self,
+        collective_slug: str,
+        description: str,
+        amount_cents: int,
+        receipt_file: str,
+        payee_slug: str | None = None,
+        payout_method_id: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict:
+        """Submit a reimbursement expense with a receipt.
+
+        This is a high-level method that handles:
+        - Auto-detecting payee from authenticated user if not provided
+        - Auto-selecting first payout method if not provided
+        - Converting HTML receipts to PDF automatically
+        - Uploading the receipt file
+        - Creating the RECEIPT-type expense
+
+        Use this for reimbursements where you paid out-of-pocket and need
+        to be paid back. Requires a receipt file.
+
+        Args:
+            collective_slug: The collective's slug (e.g., "policyengine").
+            description: Description of the expense.
+            amount_cents: Amount in cents (e.g., 32500 for $325.00).
+            receipt_file: Path to receipt file (PDF, PNG, JPG, or HTML).
+                HTML files are automatically converted to PDF.
+            payee_slug: Your account slug. Auto-detected if not provided.
+            payout_method_id: Payout method ID. Uses first available if not provided.
+            tags: Optional list of tags for categorization.
+
+        Returns:
+            Created expense data with id, legacyId, description, status.
+
+        Example:
+            >>> expense = client.submit_reimbursement(
+            ...     collective_slug="policyengine",
+            ...     description="NASI Membership Dues 2026",
+            ...     amount_cents=32500,
+            ...     receipt_file="/path/to/receipt.pdf",
+            ...     tags=["membership", "professional development"]
+            ... )
+            >>> print(f"Created: https://opencollective.com/policyengine/expenses/{expense['legacyId']}")
+        """
+        # Auto-detect payee from authenticated user
+        if not payee_slug:
+            me = self.get_me()
+            payee_slug = me.get("slug")
+            if not payee_slug:
+                raise ValueError(
+                    "Could not determine payee. Please provide payee_slug."
+                )
+
+        # Auto-select first payout method if not provided
+        if not payout_method_id:
+            methods = self.get_payout_methods(payee_slug)
+            if methods:
+                payout_method_id = methods[0]["id"]
+
+        # Handle file conversion and upload
+        file_to_upload = receipt_file
+        temp_pdf = None
+
+        if receipt_file.lower().endswith(".html") or receipt_file.lower().endswith(
+            ".htm"
+        ):
+            temp_pdf = self._convert_html_to_pdf(receipt_file)
+            file_to_upload = temp_pdf
+
+        try:
+            # Upload the receipt
+            file_info = self.upload_file(file_to_upload, kind="EXPENSE_ITEM")
+            receipt_url = file_info.get("url")
+
+            if not receipt_url:
+                raise ValueError("Failed to upload receipt file")
+
+            # Create the expense with the receipt attached to the item
+            mutation = """
+            mutation CreateExpense(
+                $expense: ExpenseCreateInput!,
+                $account: AccountReferenceInput!
+            ) {
+                createExpense(expense: $expense, account: $account) {
+                    id
+                    legacyId
+                    description
+                    amount
+                    status
+                }
+            }
+            """
+
+            expense_input = {
+                "description": description,
+                "type": "RECEIPT",
+                "payee": {"slug": payee_slug},
+                "items": [
+                    {
+                        "description": description,
+                        "amount": amount_cents,
+                        "url": receipt_url,
+                    }
+                ],
+            }
+            if payout_method_id:
+                expense_input["payoutMethod"] = {"id": payout_method_id}
+            if tags:
+                expense_input["tags"] = tags
+
+            variables = {
+                "account": {"slug": collective_slug},
+                "expense": expense_input,
+            }
+
+            data = self._request(mutation, variables)
+            return data.get("createExpense", {})
+
+        finally:
+            # Clean up temp PDF if created
+            if temp_pdf and os.path.exists(temp_pdf):
+                os.unlink(temp_pdf)
+
+    def submit_invoice(
+        self,
+        collective_slug: str,
+        description: str,
+        amount_cents: int,
+        payee_slug: str | None = None,
+        payout_method_id: str | None = None,
+        invoice_file: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict:
+        """Submit an invoice expense.
+
+        This is a high-level method for invoices where you're billing
+        for services rendered. Unlike reimbursements, invoices don't
+        require a receipt - you're requesting payment for work done.
+
+        Use this for:
+        - Contractor payments
+        - Service fees
+        - Consulting work
+        - Any expense where you're billing (not being reimbursed)
+
+        Args:
+            collective_slug: The collective's slug (e.g., "policyengine").
+            description: Description of the invoice.
+            amount_cents: Amount in cents (e.g., 100000 for $1,000.00).
+            payee_slug: Your account slug. Auto-detected if not provided.
+            payout_method_id: Payout method ID. Uses first available if not provided.
+            invoice_file: Optional path to invoice PDF for documentation.
+            tags: Optional list of tags for categorization.
+
+        Returns:
+            Created expense data with id, legacyId, description, status.
+
+        Example:
+            >>> expense = client.submit_invoice(
+            ...     collective_slug="policyengine",
+            ...     description="January 2026 Consulting",
+            ...     amount_cents=500000,
+            ...     tags=["consulting"]
+            ... )
+        """
+        # Auto-detect payee from authenticated user
+        if not payee_slug:
+            me = self.get_me()
+            payee_slug = me.get("slug")
+            if not payee_slug:
+                raise ValueError(
+                    "Could not determine payee. Please provide payee_slug."
+                )
+
+        # Auto-select first payout method if not provided
+        if not payout_method_id:
+            methods = self.get_payout_methods(payee_slug)
+            if methods:
+                payout_method_id = methods[0]["id"]
+
+        # Handle optional invoice file upload
+        invoice_url = None
+        if invoice_file:
+            file_info = self.upload_file(invoice_file, kind="EXPENSE_INVOICE")
+            invoice_url = file_info.get("url")
+
+        # Create the invoice expense
+        return self.create_expense(
+            collective_slug=collective_slug,
+            payee_slug=payee_slug,
+            description=description,
+            amount_cents=amount_cents,
+            payout_method_id=payout_method_id,
+            expense_type="INVOICE",
+            tags=tags,
+            invoice_url=invoice_url,
+        )

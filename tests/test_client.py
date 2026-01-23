@@ -1,5 +1,6 @@
 """Tests for OpenCollective client."""
 
+import os
 import tempfile
 from io import BytesIO
 
@@ -611,3 +612,303 @@ class TestUploadFile:
         request = responses.calls[0].request
         # The Content-Type header for multipart should contain image/png
         assert b"image/png" in request.body
+
+
+class TestGetMe:
+    """Tests for get_me method."""
+
+    @responses.activate
+    def test_get_me(self):
+        """Can get current authenticated user."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "me": {
+                        "id": "user-abc123",
+                        "slug": "max-ghenis",
+                        "name": "Max Ghenis",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        me = client.get_me()
+
+        assert me["id"] == "user-abc123"
+        assert me["slug"] == "max-ghenis"
+        assert me["name"] == "Max Ghenis"
+
+
+class TestDeleteExpense:
+    """Tests for delete_expense method."""
+
+    @responses.activate
+    def test_delete_expense(self):
+        """Can delete a draft/pending expense."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "deleteExpense": {
+                        "id": "exp-abc123",
+                        "legacyId": 12345,
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.delete_expense("exp-abc123")
+
+        assert result["id"] == "exp-abc123"
+        assert result["legacyId"] == 12345
+
+
+class TestSubmitReimbursement:
+    """Tests for submit_reimbursement high-level method."""
+
+    @responses.activate
+    def test_submit_reimbursement_with_pdf(self):
+        """Can submit reimbursement with PDF receipt."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {
+                        "payoutMethods": [{"id": "pm-123", "type": "BANK_ACCOUNT"}]
+                    }
+                }
+            },
+            status=200,
+        )
+        # Mock upload_file - returns list format
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {
+                            "file": {
+                                "id": "file-123",
+                                "url": "https://example.com/receipt.pdf",
+                            }
+                        }
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-123",
+                        "legacyId": 99999,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        # Create a temp PDF file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"fake pdf content")
+            temp_path = f.name
+
+        try:
+            result = client.submit_reimbursement(
+                collective_slug="policyengine",
+                description="Test expense",
+                amount_cents=10000,
+                receipt_file=temp_path,
+                tags=["test"],
+            )
+
+            assert result["legacyId"] == 99999
+            assert result["status"] == "PENDING"
+        finally:
+            os.unlink(temp_path)
+
+    @responses.activate
+    def test_submit_reimbursement_with_explicit_payee(self):
+        """Can submit reimbursement with explicit payee slug."""
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {"payoutMethods": [{"id": "pm-456", "type": "PAYPAL"}]}
+                }
+            },
+            status=200,
+        )
+        # Mock upload_file
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {"file": {"id": "f1", "url": "https://example.com/r.pdf"}}
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {"id": "e1", "legacyId": 111, "status": "PENDING"}
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"pdf")
+            temp_path = f.name
+
+        try:
+            result = client.submit_reimbursement(
+                collective_slug="policyengine",
+                description="Test",
+                amount_cents=5000,
+                receipt_file=temp_path,
+                payee_slug="explicit-user",
+            )
+            assert result["legacyId"] == 111
+        finally:
+            os.unlink(temp_path)
+
+
+class TestSubmitInvoice:
+    """Tests for submit_invoice high-level method."""
+
+    @responses.activate
+    def test_submit_invoice_without_file(self):
+        """Can submit invoice without file attachment."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "inv-1",
+                        "legacyId": 222,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.submit_invoice(
+            collective_slug="policyengine",
+            description="January Consulting",
+            amount_cents=500000,
+            tags=["consulting"],
+        )
+
+        assert result["legacyId"] == 222
+        assert result["status"] == "PENDING"
+
+    @responses.activate
+    def test_submit_invoice_with_file(self):
+        """Can submit invoice with file attachment."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"slug": "test-user"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"account": {"payoutMethods": [{"id": "pm-2"}]}}},
+            status=200,
+        )
+        # Mock upload_file
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [{"file": {"url": "https://example.com/invoice.pdf"}}]
+                }
+            },
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {"id": "inv-2", "legacyId": 333, "status": "DRAFT"}
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"invoice pdf")
+            temp_path = f.name
+
+        try:
+            result = client.submit_invoice(
+                collective_slug="policyengine",
+                description="Invoice with file",
+                amount_cents=100000,
+                invoice_file=temp_path,
+            )
+            assert result["legacyId"] == 333
+        finally:
+            os.unlink(temp_path)
