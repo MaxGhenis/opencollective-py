@@ -809,6 +809,311 @@ class TestSubmitReimbursement:
             os.unlink(temp_path)
 
 
+class TestCurrencySupport:
+    """Tests for multi-currency expense support."""
+
+    @responses.activate
+    def test_create_expense_with_currency(self):
+        """Can create an expense with explicit currency."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-gbp",
+                        "legacyId": 200,
+                        "description": "GCP Cloud Services",
+                        "amount": 205895,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="GCP Cloud Services",
+            amount_cents=205895,
+            currency="GBP",
+            tags=["gcp", "infrastructure"],
+        )
+
+        assert result["description"] == "GCP Cloud Services"
+        assert result["status"] == "DRAFT"
+
+        # Verify the request included currency
+        request_body = responses.calls[0].request.body.decode()
+        assert '"currency":"GBP"' in request_body.replace(" ", "")
+
+    @responses.activate
+    def test_create_expense_without_currency_omits_field(self):
+        """Currency field is omitted when not provided (uses collective default)."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-usd",
+                        "legacyId": 201,
+                        "description": "Test",
+                        "amount": 1000,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="Test",
+            amount_cents=1000,
+        )
+
+        request_body = responses.calls[0].request.body.decode()
+        # currency should NOT appear in expense input when not specified
+        no_currency = '"currency"' not in request_body
+        null_currency = '"currency":null' in request_body.replace(" ", "")
+        assert no_currency or null_currency
+
+    @responses.activate
+    def test_submit_reimbursement_with_currency(self):
+        """Can submit reimbursement with explicit currency."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {
+                        "payoutMethods": [{"id": "pm-123", "type": "BANK_ACCOUNT"}]
+                    }
+                }
+            },
+            status=200,
+        )
+        # Mock upload_file
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {"file": {"id": "f1", "url": "https://example.com/r.pdf"}}
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-gbp",
+                        "legacyId": 202,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"fake pdf")
+            temp_path = f.name
+
+        try:
+            result = client.submit_reimbursement(
+                collective_slug="policyengine",
+                description="GCP Jan 2026",
+                amount_cents=205895,
+                receipt_file=temp_path,
+                currency="GBP",
+                tags=["gcp"],
+            )
+            assert result["legacyId"] == 202
+
+            # Verify currency was passed in the create_expense call
+            create_request = responses.calls[3].request.body.decode()
+            assert '"currency":"GBP"' in create_request.replace(" ", "")
+        finally:
+            os.unlink(temp_path)
+
+    @responses.activate
+    def test_submit_invoice_with_currency(self):
+        """Can submit invoice with explicit currency."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "inv-gbp",
+                        "legacyId": 203,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.submit_invoice(
+            collective_slug="policyengine",
+            description="EUR Consulting",
+            amount_cents=500000,
+            currency="EUR",
+        )
+
+        assert result["legacyId"] == 203
+
+        create_request = responses.calls[2].request.body.decode()
+        assert '"currency":"EUR"' in create_request.replace(" ", "")
+
+    @responses.activate
+    def test_create_expense_with_incurred_at(self):
+        """Can create an expense with incurredAt date on items."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-dated",
+                        "legacyId": 204,
+                        "description": "GCP Jan 2026",
+                        "amount": 205895,
+                        "status": "DRAFT",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+        result = client.create_expense(
+            collective_slug="policyengine",
+            payee_slug="max-ghenis",
+            description="GCP Jan 2026",
+            amount_cents=205895,
+            currency="GBP",
+            incurred_at="2026-01-31",
+        )
+
+        assert result["legacyId"] == 204
+
+        request_body = responses.calls[0].request.body.decode()
+        assert "2026-01-31" in request_body
+
+    @responses.activate
+    def test_submit_reimbursement_with_incurred_at(self):
+        """Can submit reimbursement with incurredAt date."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {
+                        "payoutMethods": [{"id": "pm-123", "type": "BANK_ACCOUNT"}]
+                    }
+                }
+            },
+            status=200,
+        )
+        # Mock upload_file
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {"file": {"id": "f1", "url": "https://example.com/r.pdf"}}
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock create_expense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-dated",
+                        "legacyId": 205,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client = OpenCollectiveClient(access_token="test_token")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"fake pdf")
+            temp_path = f.name
+
+        try:
+            result = client.submit_reimbursement(
+                collective_slug="policyengine",
+                description="GCP Jan 2026",
+                amount_cents=205895,
+                receipt_file=temp_path,
+                currency="GBP",
+                incurred_at="2026-01-31",
+            )
+            assert result["legacyId"] == 205
+
+            create_request = responses.calls[3].request.body.decode()
+            assert "2026-01-31" in create_request
+        finally:
+            os.unlink(temp_path)
+
+
 class TestSubmitInvoice:
     """Tests for submit_invoice high-level method."""
 
