@@ -9,18 +9,14 @@ import responses
 
 from opencollective import OpenCollectiveClient
 
-API_URL = "https://api.opencollective.com/graphql/v2"
-# File uploads use frontend proxy due to infrastructure issues with direct API
-# See: https://github.com/opencollective/opencollective-api/issues/11293
-UPLOAD_URL = "https://opencollective.com/api/graphql/v2"
+from .conftest import API_URL, UPLOAD_URL
 
 
 class TestOpenCollectiveClient:
     """Tests for the OpenCollective API client."""
 
-    def test_client_init_with_token(self):
+    def test_client_init_with_token(self, client):
         """Client can be initialized with an access token."""
-        client = OpenCollectiveClient(access_token="test_token")
         assert client.access_token == "test_token"
 
     def test_client_init_without_token_raises(self):
@@ -29,7 +25,7 @@ class TestOpenCollectiveClient:
             OpenCollectiveClient()
 
     @responses.activate
-    def test_get_collective(self):
+    def test_get_collective(self, client):
         """Can fetch collective information."""
         responses.add(
             responses.POST,
@@ -48,7 +44,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         collective = client.get_collective("policyengine")
 
         assert collective["slug"] == "policyengine"
@@ -56,7 +51,7 @@ class TestOpenCollectiveClient:
         assert collective["currency"] == "USD"
 
     @responses.activate
-    def test_get_expenses(self):
+    def test_get_expenses(self, client):
         """Can fetch expenses for a collective."""
         responses.add(
             responses.POST,
@@ -99,7 +94,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.get_expenses("policyengine", limit=10)
 
         assert result["totalCount"] == 2
@@ -108,7 +102,7 @@ class TestOpenCollectiveClient:
         assert result["nodes"][0]["amount"] == 10000
 
     @responses.activate
-    def test_get_expenses_with_status_filter(self):
+    def test_get_expenses_with_status_filter(self, client):
         """Can filter expenses by status."""
         responses.add(
             responses.POST,
@@ -138,14 +132,13 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.get_expenses("policyengine", status="PENDING")
 
         assert result["totalCount"] == 1
         assert result["nodes"][0]["status"] == "PENDING"
 
     @responses.activate
-    def test_approve_expense(self):
+    def test_approve_expense(self, client):
         """Can approve a pending expense."""
         responses.add(
             responses.POST,
@@ -163,13 +156,12 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.approve_expense("exp2")
 
         assert result["status"] == "APPROVED"
 
     @responses.activate
-    def test_reject_expense(self):
+    def test_reject_expense(self, client):
         """Can reject a pending expense."""
         responses.add(
             responses.POST,
@@ -187,13 +179,12 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.reject_expense("exp2", message="Invalid receipt")
 
         assert result["status"] == "REJECTED"
 
     @responses.activate
-    def test_create_expense(self):
+    def test_create_expense(self, client):
         """Can create a new expense."""
         responses.add(
             responses.POST,
@@ -212,7 +203,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -224,7 +214,7 @@ class TestOpenCollectiveClient:
         assert result["status"] == "DRAFT"
 
     @responses.activate
-    def test_create_expense_with_attachments(self):
+    def test_create_expense_with_attachments(self, client):
         """Can create an expense with file attachments."""
         responses.add(
             responses.POST,
@@ -243,7 +233,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -256,13 +245,12 @@ class TestOpenCollectiveClient:
         assert result["description"] == "GCP Cloud Services"
         assert result["status"] == "DRAFT"
 
-        # Verify the request included attachedFiles
         request_body = responses.calls[0].request.body.decode()
         assert "attachedFiles" in request_body
         assert "https://example.com/receipt.pdf" in request_body
 
     @responses.activate
-    def test_create_invoice_expense(self):
+    def test_create_invoice_expense(self, client):
         """Can create an invoice expense with invoice file."""
         responses.add(
             responses.POST,
@@ -281,7 +269,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -293,13 +280,12 @@ class TestOpenCollectiveClient:
 
         assert result["description"] == "Consulting services"
 
-        # Verify the request included invoiceFile
         request_body = responses.calls[0].request.body.decode()
         assert "invoiceFile" in request_body
         assert "https://example.com/invoice.pdf" in request_body
 
     @responses.activate
-    def test_get_payout_methods(self):
+    def test_get_payout_methods(self, client):
         """Can fetch payout methods for an account."""
         responses.add(
             responses.POST,
@@ -331,7 +317,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         methods = client.get_payout_methods("max-ghenis")
 
         assert len(methods) == 2
@@ -340,7 +325,7 @@ class TestOpenCollectiveClient:
         assert methods[1]["type"] == "PAYPAL"
 
     @responses.activate
-    def test_create_expense_with_payout_method(self):
+    def test_create_expense_with_payout_method(self, client):
         """Can create expense with payout method."""
         responses.add(
             responses.POST,
@@ -359,7 +344,6 @@ class TestOpenCollectiveClient:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -371,7 +355,6 @@ class TestOpenCollectiveClient:
         assert result["description"] == "Cloud services"
         assert result["status"] == "DRAFT"
 
-        # Verify the request included payoutMethod
         request_body = responses.calls[0].request.body.decode()
         assert "payoutMethod" in request_body
         assert "pm_abc123" in request_body
@@ -399,15 +382,13 @@ class TestOpenCollectiveClient:
             client.get_collective("policyengine")
 
     @responses.activate
-    def test_http_error_handling(self):
+    def test_http_error_handling(self, client):
         """Client handles HTTP errors."""
         responses.add(
             responses.POST,
             API_URL,
             status=500,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         with pytest.raises(Exception):
             client.get_collective("policyengine")
@@ -417,7 +398,7 @@ class TestUploadFile:
     """Tests for file upload functionality."""
 
     @responses.activate
-    def test_upload_file_from_path(self):
+    def test_upload_file_from_path(self, client):
         """Can upload a file from a file path."""
         responses.add(
             responses.POST,
@@ -438,9 +419,6 @@ class TestUploadFile:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
-
-        # Create a temporary file
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"test pdf content")
             temp_path = f.name
@@ -453,7 +431,6 @@ class TestUploadFile:
             )
             assert result["id"] == "file-abc123"
 
-            # Verify request follows GraphQL multipart spec
             request = responses.calls[0].request
             assert b"operations" in request.body
             assert b"EXPENSE_ATTACHED_FILE" in request.body
@@ -461,7 +438,7 @@ class TestUploadFile:
             os.unlink(temp_path)
 
     @responses.activate
-    def test_upload_file_from_file_object(self):
+    def test_upload_file_from_file_object(self, client):
         """Can upload a file from a file-like object."""
         responses.add(
             responses.POST,
@@ -482,8 +459,6 @@ class TestUploadFile:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
-
         file_obj = BytesIO(b"test image content")
         result = client.upload_file(
             file_obj, filename="receipt.png", kind="EXPENSE_ITEM"
@@ -495,12 +470,11 @@ class TestUploadFile:
         )
         assert result["name"] == "receipt.png"
 
-        # Verify request included correct kind
         request = responses.calls[0].request
         assert b"EXPENSE_ITEM" in request.body
 
     @responses.activate
-    def test_upload_file_with_custom_kind(self):
+    def test_upload_file_with_custom_kind(self, client):
         """Can upload a file with custom file kind."""
         responses.add(
             responses.POST,
@@ -521,9 +495,6 @@ class TestUploadFile:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
-
-        # Create a temporary file
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"test invoice content")
             temp_path = f.name
@@ -535,21 +506,18 @@ class TestUploadFile:
                 == "https://opencollective-production.s3.us-west-1.amazonaws.com/ghi789.pdf"
             )
 
-            # Verify request included correct kind
             request = responses.calls[0].request
             assert b"EXPENSE_INVOICE" in request.body
         finally:
             os.unlink(temp_path)
 
-    def test_upload_file_not_found(self):
+    def test_upload_file_not_found(self, client):
         """Raises FileNotFoundError for nonexistent file."""
-        client = OpenCollectiveClient(access_token="test_token")
-
         with pytest.raises(FileNotFoundError, match="File not found"):
             client.upload_file("/nonexistent/path/to/file.pdf")
 
     @responses.activate
-    def test_upload_file_api_error(self):
+    def test_upload_file_api_error(self, client):
         """Handles API error responses."""
         responses.add(
             responses.POST,
@@ -562,10 +530,8 @@ class TestUploadFile:
                     }
                 ]
             },
-            status=200,  # GraphQL returns 200 with errors array
+            status=200,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         file_obj = BytesIO(b"test content")
 
@@ -573,7 +539,7 @@ class TestUploadFile:
             client.upload_file(file_obj, filename="test.txt")
 
     @responses.activate
-    def test_upload_file_mime_type_detection(self):
+    def test_upload_file_mime_type_detection(self, client):
         """Correctly detects MIME type from filename."""
         responses.add(
             responses.POST,
@@ -594,19 +560,13 @@ class TestUploadFile:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
-
-        # Test PNG file
         file_obj = BytesIO(b"fake png content")
         result = client.upload_file(file_obj, filename="image.png")
 
-        # Verify file info returned correctly
         assert result["type"] == "image/png"
         assert result["name"] == "image.png"
 
-        # Check MIME type in request body
         request = responses.calls[0].request
-        # The Content-Type header for multipart should contain image/png
         assert b"image/png" in request.body
 
 
@@ -614,7 +574,7 @@ class TestGetMe:
     """Tests for get_me method."""
 
     @responses.activate
-    def test_get_me(self):
+    def test_get_me(self, client):
         """Can get current authenticated user."""
         responses.add(
             responses.POST,
@@ -631,7 +591,6 @@ class TestGetMe:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         me = client.get_me()
 
         assert me["id"] == "user-abc123"
@@ -643,7 +602,7 @@ class TestDeleteExpense:
     """Tests for delete_expense method."""
 
     @responses.activate
-    def test_delete_expense(self):
+    def test_delete_expense(self, client):
         """Can delete a draft/pending expense."""
         responses.add(
             responses.POST,
@@ -659,7 +618,6 @@ class TestDeleteExpense:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.delete_expense("exp-abc123")
 
         assert result["id"] == "exp-abc123"
@@ -670,16 +628,14 @@ class TestSubmitReimbursement:
     """Tests for submit_reimbursement high-level method."""
 
     @responses.activate
-    def test_submit_reimbursement_with_pdf(self):
+    def test_submit_reimbursement_with_pdf(self, client):
         """Can submit reimbursement with PDF receipt."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
@@ -692,7 +648,6 @@ class TestSubmitReimbursement:
             },
             status=200,
         )
-        # Mock upload_file - returns list format
         responses.add(
             responses.POST,
             UPLOAD_URL,
@@ -710,7 +665,6 @@ class TestSubmitReimbursement:
             },
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -726,9 +680,6 @@ class TestSubmitReimbursement:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
-
-        # Create a temp PDF file
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"fake pdf content")
             temp_path = f.name
@@ -748,9 +699,8 @@ class TestSubmitReimbursement:
             os.unlink(temp_path)
 
     @responses.activate
-    def test_submit_reimbursement_with_explicit_payee(self):
+    def test_submit_reimbursement_with_explicit_payee(self, client):
         """Can submit reimbursement with explicit payee slug."""
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
@@ -761,7 +711,6 @@ class TestSubmitReimbursement:
             },
             status=200,
         )
-        # Mock upload_file
         responses.add(
             responses.POST,
             UPLOAD_URL,
@@ -774,7 +723,6 @@ class TestSubmitReimbursement:
             },
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -785,8 +733,6 @@ class TestSubmitReimbursement:
             },
             status=200,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"pdf")
@@ -809,7 +755,7 @@ class TestCurrencySupport:
     """Tests for multi-currency expense support."""
 
     @responses.activate
-    def test_create_expense_with_currency(self):
+    def test_create_expense_with_currency(self, client):
         """Can create an expense with explicit currency."""
         responses.add(
             responses.POST,
@@ -828,7 +774,6 @@ class TestCurrencySupport:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -841,12 +786,11 @@ class TestCurrencySupport:
         assert result["description"] == "GCP Cloud Services"
         assert result["status"] == "DRAFT"
 
-        # Verify the request included currency
         request_body = responses.calls[0].request.body.decode()
         assert '"currency":"GBP"' in request_body.replace(" ", "")
 
     @responses.activate
-    def test_create_expense_without_currency_omits_field(self):
+    def test_create_expense_without_currency_omits_field(self, client):
         """Currency field is omitted when not provided (uses collective default)."""
         responses.add(
             responses.POST,
@@ -865,7 +809,6 @@ class TestCurrencySupport:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -874,22 +817,19 @@ class TestCurrencySupport:
         )
 
         request_body = responses.calls[0].request.body.decode()
-        # currency should NOT appear in expense input when not specified
         no_currency = '"currency"' not in request_body
         null_currency = '"currency":null' in request_body.replace(" ", "")
         assert no_currency or null_currency
 
     @responses.activate
-    def test_submit_reimbursement_with_currency(self):
+    def test_submit_reimbursement_with_currency(self, client):
         """Can submit reimbursement with explicit currency."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
@@ -902,7 +842,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-        # Mock upload_file
         responses.add(
             responses.POST,
             UPLOAD_URL,
@@ -915,7 +854,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -930,8 +868,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"fake pdf")
@@ -948,30 +884,26 @@ class TestCurrencySupport:
             )
             assert result["legacyId"] == 202
 
-            # Verify currency was passed in the create_expense call
             create_request = responses.calls[3].request.body.decode()
             assert '"currency":"GBP"' in create_request.replace(" ", "")
         finally:
             os.unlink(temp_path)
 
     @responses.activate
-    def test_submit_invoice_with_currency(self):
+    def test_submit_invoice_with_currency(self, client):
         """Can submit invoice with explicit currency."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"slug": "max-ghenis"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -987,7 +919,6 @@ class TestCurrencySupport:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.submit_invoice(
             collective_slug="policyengine",
             description="EUR Consulting",
@@ -1001,7 +932,7 @@ class TestCurrencySupport:
         assert '"currency":"EUR"' in create_request.replace(" ", "")
 
     @responses.activate
-    def test_create_expense_with_incurred_at(self):
+    def test_create_expense_with_incurred_at(self, client):
         """Can create an expense with incurredAt date on items."""
         responses.add(
             responses.POST,
@@ -1020,7 +951,6 @@ class TestCurrencySupport:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.create_expense(
             collective_slug="policyengine",
             payee_slug="max-ghenis",
@@ -1036,16 +966,14 @@ class TestCurrencySupport:
         assert "2026-01-31" in request_body
 
     @responses.activate
-    def test_submit_reimbursement_with_incurred_at(self):
+    def test_submit_reimbursement_with_incurred_at(self, client):
         """Can submit reimbursement with incurredAt date."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
@@ -1058,7 +986,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-        # Mock upload_file
         responses.add(
             responses.POST,
             UPLOAD_URL,
@@ -1071,7 +998,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -1086,8 +1012,6 @@ class TestCurrencySupport:
             },
             status=200,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"fake pdf")
@@ -1114,23 +1038,20 @@ class TestSubmitInvoice:
     """Tests for submit_invoice high-level method."""
 
     @responses.activate
-    def test_submit_invoice_without_file(self):
+    def test_submit_invoice_without_file(self, client):
         """Can submit invoice without file attachment."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"slug": "max-ghenis"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -1146,7 +1067,6 @@ class TestSubmitInvoice:
             status=200,
         )
 
-        client = OpenCollectiveClient(access_token="test_token")
         result = client.submit_invoice(
             collective_slug="policyengine",
             description="January Consulting",
@@ -1158,23 +1078,20 @@ class TestSubmitInvoice:
         assert result["status"] == "PENDING"
 
     @responses.activate
-    def test_submit_invoice_with_file(self):
+    def test_submit_invoice_with_file(self, client):
         """Can submit invoice with file attachment."""
-        # Mock get_me
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"me": {"slug": "test-user"}}},
             status=200,
         )
-        # Mock get_payout_methods
         responses.add(
             responses.POST,
             API_URL,
             json={"data": {"account": {"payoutMethods": [{"id": "pm-2"}]}}},
             status=200,
         )
-        # Mock upload_file
         responses.add(
             responses.POST,
             UPLOAD_URL,
@@ -1185,7 +1102,6 @@ class TestSubmitInvoice:
             },
             status=200,
         )
-        # Mock create_expense
         responses.add(
             responses.POST,
             API_URL,
@@ -1196,8 +1112,6 @@ class TestSubmitInvoice:
             },
             status=200,
         )
-
-        client = OpenCollectiveClient(access_token="test_token")
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"invoice pdf")

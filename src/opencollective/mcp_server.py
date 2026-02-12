@@ -35,6 +35,16 @@ def get_client() -> OpenCollectiveClient:
     return OpenCollectiveClient(access_token=token_data["access_token"])
 
 
+def _expense_url(collective: str, legacy_id: int | str) -> str:
+    """Build the OpenCollective expense URL."""
+    return f"https://opencollective.com/{collective}/expenses/{legacy_id}"
+
+
+def _text(content: str) -> list:
+    """Wrap a string in a single-element TextContent list for MCP responses."""
+    return [TextContent(type="text", text=content)]
+
+
 def create_server() -> "Server":
     """Create and configure the MCP server."""
     if not HAS_MCP:
@@ -214,47 +224,37 @@ def create_server() -> "Server":
         try:
             client = get_client()
 
-            if name == "submit_reimbursement":
+            if name in ("submit_reimbursement", "submit_invoice"):
                 amount_cents = int(arguments["amount"] * 100)
-                expense = client.submit_reimbursement(
-                    collective_slug=arguments["collective"],
-                    description=arguments["description"],
-                    amount_cents=amount_cents,
-                    receipt_file=arguments["receipt_file"],
-                    tags=arguments.get("tags"),
-                )
-                url = f"https://opencollective.com/{arguments['collective']}/expenses/{expense['legacyId']}"
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Reimbursement submitted!\n"
-                        f"  ID: {expense['legacyId']}\n"
-                        f"  Amount: ${arguments['amount']:.2f}\n"
-                        f"  Status: {expense['status']}\n"
-                        f"  URL: {url}",
-                    )
-                ]
+                collective = arguments["collective"]
 
-            elif name == "submit_invoice":
-                amount_cents = int(arguments["amount"] * 100)
-                expense = client.submit_invoice(
-                    collective_slug=arguments["collective"],
-                    description=arguments["description"],
-                    amount_cents=amount_cents,
-                    invoice_file=arguments.get("invoice_file"),
-                    tags=arguments.get("tags"),
-                )
-                url = f"https://opencollective.com/{arguments['collective']}/expenses/{expense['legacyId']}"
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Invoice submitted!\n"
-                        f"  ID: {expense['legacyId']}\n"
-                        f"  Amount: ${arguments['amount']:.2f}\n"
-                        f"  Status: {expense['status']}\n"
-                        f"  URL: {url}",
+                if name == "submit_reimbursement":
+                    expense = client.submit_reimbursement(
+                        collective_slug=collective,
+                        description=arguments["description"],
+                        amount_cents=amount_cents,
+                        receipt_file=arguments["receipt_file"],
+                        tags=arguments.get("tags"),
                     )
-                ]
+                    label = "Reimbursement"
+                else:
+                    expense = client.submit_invoice(
+                        collective_slug=collective,
+                        description=arguments["description"],
+                        amount_cents=amount_cents,
+                        invoice_file=arguments.get("invoice_file"),
+                        tags=arguments.get("tags"),
+                    )
+                    label = "Invoice"
+
+                url = _expense_url(collective, expense["legacyId"])
+                return _text(
+                    f"\u2713 {label} submitted!\n"
+                    f"  ID: {expense['legacyId']}\n"
+                    f"  Amount: ${arguments['amount']:.2f}\n"
+                    f"  Status: {expense['status']}\n"
+                    f"  URL: {url}"
+                )
 
             elif name == "list_expenses":
                 result = client.get_expenses(
@@ -265,7 +265,7 @@ def create_server() -> "Server":
                 nodes = result.get("nodes", [])
 
                 if not nodes:
-                    return [TextContent(type="text", text="No expenses found.")]
+                    return _text("No expenses found.")
 
                 lines = [f"Found {len(nodes)} expense(s):\n"]
                 for exp in nodes:
@@ -279,39 +279,28 @@ def create_server() -> "Server":
                         f"     Payee: {payee} | Status: {status}"
                     )
 
-                return [TextContent(type="text", text="\n".join(lines))]
+                return _text("\n".join(lines))
 
             elif name == "delete_expense":
                 result = client.delete_expense(arguments["expense_id"])
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Deleted expense #{result.get('legacyId')}",
-                    )
-                ]
+                return _text(f"\u2713 Deleted expense #{result.get('legacyId')}")
 
             elif name == "approve_expense":
                 result = client.approve_expense(arguments["expense_id"])
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Approved expense #{result.get('legacyId')}\n"
-                        f"  Status: {result.get('status')}",
-                    )
-                ]
+                return _text(
+                    f"\u2713 Approved expense #{result.get('legacyId')}\n"
+                    f"  Status: {result.get('status')}"
+                )
 
             elif name == "reject_expense":
                 result = client.reject_expense(
                     arguments["expense_id"],
                     message=arguments.get("message"),
                 )
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Rejected expense #{result.get('legacyId')}\n"
-                        f"  Status: {result.get('status')}",
-                    )
-                ]
+                return _text(
+                    f"\u2713 Rejected expense #{result.get('legacyId')}\n"
+                    f"  Status: {result.get('status')}"
+                )
 
             elif name == "get_me":
                 me = client.get_me()
@@ -321,25 +310,22 @@ def create_server() -> "Server":
                     text += "\n\nPayout methods:"
                     for m in methods:
                         text += f"\n  - {m['type']}: {m['id']}"
-                return [TextContent(type="text", text=text)]
+                return _text(text)
 
             elif name == "get_collective":
                 collective = client.get_collective(arguments["slug"])
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"Collective: {collective.get('name')}\n"
-                        f"  Slug: {collective.get('slug')}\n"
-                        f"  Currency: {collective.get('currency')}\n"
-                        f"  Description: {collective.get('description', 'N/A')}",
-                    )
-                ]
+                return _text(
+                    f"Collective: {collective.get('name')}\n"
+                    f"  Slug: {collective.get('slug')}\n"
+                    f"  Currency: {collective.get('currency')}\n"
+                    f"  Description: {collective.get('description', 'N/A')}"
+                )
 
             else:
-                return [TextContent(type="text", text=f"Unknown tool: {name}")]
+                return _text(f"Unknown tool: {name}")
 
         except Exception as e:
-            return [TextContent(type="text", text=f"Error: {e}")]
+            return _text(f"Error: {e}")
 
     return server
 

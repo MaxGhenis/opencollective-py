@@ -51,6 +51,32 @@ class OAuth2Handler:
         }
         return f"{AUTH_URL}?{urlencode(params)}"
 
+    def _token_request(self, data: dict, error_label: str) -> dict:
+        """Make a token request to the OAuth2 token endpoint.
+
+        Args:
+            data: Form data for the token request.
+            error_label: Label for error messages (e.g. "Token exchange").
+
+        Returns:
+            Token data from the response.
+
+        Raises:
+            Exception: If the request fails.
+        """
+        response = requests.post(TOKEN_URL, data=data)
+
+        if response.status_code != 200:
+            error = response.json().get("error_description", response.text)
+            raise Exception(f"{error_label} failed: {error}")
+
+        token_data = response.json()
+
+        if self.token_file:
+            self.save_token(token_data)
+
+        return token_data
+
     def exchange_code(self, code: str) -> dict:
         """Exchange authorization code for access token.
 
@@ -63,8 +89,7 @@ class OAuth2Handler:
         Raises:
             Exception: If token exchange fails.
         """
-        response = requests.post(
-            TOKEN_URL,
+        return self._token_request(
             data={
                 "grant_type": "authorization_code",
                 "client_id": self.client_id,
@@ -72,18 +97,8 @@ class OAuth2Handler:
                 "code": code,
                 "redirect_uri": self.redirect_uri,
             },
+            error_label="Token exchange",
         )
-
-        if response.status_code != 200:
-            error = response.json().get("error_description", response.text)
-            raise Exception(f"Token exchange failed: {error}")
-
-        token_data = response.json()
-
-        if self.token_file:
-            self.save_token(token_data)
-
-        return token_data
 
     def refresh_access_token(self, refresh_token: str) -> dict:
         """Refresh an expired access token.
@@ -97,26 +112,15 @@ class OAuth2Handler:
         Raises:
             Exception: If refresh fails.
         """
-        response = requests.post(
-            TOKEN_URL,
+        return self._token_request(
             data={
                 "grant_type": "refresh_token",
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
                 "refresh_token": refresh_token,
             },
+            error_label="Token refresh",
         )
-
-        if response.status_code != 200:
-            error = response.json().get("error_description", response.text)
-            raise Exception(f"Token refresh failed: {error}")
-
-        token_data = response.json()
-
-        if self.token_file:
-            self.save_token(token_data)
-
-        return token_data
 
     def save_token(self, token_data: dict) -> None:
         """Save token data to file.

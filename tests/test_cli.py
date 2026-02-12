@@ -1,31 +1,18 @@
 """Tests for OpenCollective CLI."""
 
-import json
-
 import pytest
 import responses
 from click.testing import CliRunner
 
 from opencollective.cli import cli
 
-API_URL = "https://api.opencollective.com/graphql/v2"
-UPLOAD_URL = "https://opencollective.com/api/graphql/v2"
+from .conftest import API_URL
 
 
 @pytest.fixture
 def runner():
     """Create a CLI test runner."""
     return CliRunner()
-
-
-@pytest.fixture
-def mock_token(tmp_path):
-    """Create a mock token file."""
-    token_dir = tmp_path / ".config" / "opencollective"
-    token_dir.mkdir(parents=True)
-    token_file = token_dir / "token.json"
-    token_file.write_text(json.dumps({"access_token": "test_token"}))
-    return str(token_file)
 
 
 class TestApproveCommand:
