@@ -879,7 +879,11 @@ class TestCurrencySupport:
 
         request_body = responses.calls[0].request.body.decode()
         # currency should NOT appear in expense input when not specified
-        assert '"currency"' not in request_body or '"currency":null' in request_body.replace(" ", "")
+        no_currency = '"currency"' not in request_body
+        null_currency = '"currency":null' in request_body.replace(
+            " ", ""
+        )
+        assert no_currency or null_currency
 
     @responses.activate
     def test_submit_reimbursement_with_currency(self):
