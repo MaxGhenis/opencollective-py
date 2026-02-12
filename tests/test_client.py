@@ -1129,6 +1129,198 @@ class TestSubmitInvoice:
             os.unlink(temp_path)
 
 
+class TestFromTokenFile:
+    """Tests for from_token_file class method."""
+
+    def test_from_token_file(self, mock_token, monkeypatch):
+        """Can create client from token file."""
+        monkeypatch.setattr("opencollective.client.TOKEN_FILE", mock_token)
+        client = OpenCollectiveClient.from_token_file()
+        assert client.access_token == "test_token"
+
+    def test_from_token_file_custom_path(self, mock_token):
+        """Can create client from custom token file path."""
+        client = OpenCollectiveClient.from_token_file(mock_token)
+        assert client.access_token == "test_token"
+
+    def test_from_token_file_missing(self, tmp_path):
+        """Raises FileNotFoundError when token file doesn't exist."""
+        with pytest.raises(FileNotFoundError):
+            OpenCollectiveClient.from_token_file(str(tmp_path / "nonexistent.json"))
+
+
+class TestApproveExpenseByLegacyId:
+    """Tests for approve/reject by legacy ID."""
+
+    @responses.activate
+    def test_approve_by_legacy_id(self, client):
+        """Can approve expense using legacy ID (integer)."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "processExpense": {
+                        "id": "exp-abc",
+                        "legacyId": 285182,
+                        "description": "Test",
+                        "status": "APPROVED",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.approve_expense(285182)
+        assert result["status"] == "APPROVED"
+        assert result["legacyId"] == 285182
+
+    @responses.activate
+    def test_approve_by_string_id(self, client):
+        """Can still approve using string internal ID."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "processExpense": {
+                        "id": "exp-abc",
+                        "legacyId": 123,
+                        "status": "APPROVED",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.approve_expense("exp-abc")
+        assert result["status"] == "APPROVED"
+
+    @responses.activate
+    def test_reject_by_legacy_id(self, client):
+        """Can reject expense using legacy ID."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "processExpense": {
+                        "id": "exp-abc",
+                        "legacyId": 999,
+                        "status": "REJECTED",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.reject_expense(999, message="Bad receipt")
+        assert result["status"] == "REJECTED"
+
+
+class TestGetExpense:
+    """Tests for get_expense (single expense by legacy ID)."""
+
+    @responses.activate
+    def test_get_expense_by_legacy_id(self, client):
+        """Can fetch a single expense by legacy ID."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expense": {
+                        "id": "exp-abc",
+                        "legacyId": 285182,
+                        "description": "OpenAI expenses",
+                        "amount": 247838,
+                        "currency": "USD",
+                        "status": "PENDING",
+                        "createdAt": "2026-02-12T00:00:00Z",
+                        "createdByAccount": {
+                            "slug": "max-ghenis",
+                            "name": "Max Ghenis",
+                        },
+                        "payee": {"slug": "max-ghenis", "name": "Max Ghenis"},
+                        "items": [
+                            {
+                                "id": "item-1",
+                                "description": "ChatGPT Plus",
+                                "amount": 28000,
+                                "url": "https://example.com/receipt.pdf",
+                                "incurredAt": "2024-03-08T00:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.get_expense(285182)
+        assert result["legacyId"] == 285182
+        assert result["description"] == "OpenAI expenses"
+        assert result["createdByAccount"]["slug"] == "max-ghenis"
+        assert len(result["items"]) == 1
+
+    @responses.activate
+    def test_get_expense_not_found(self, client):
+        """Raises on expense not found."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"expense": None}},
+            status=200,
+        )
+
+        result = client.get_expense(999999)
+        assert result is None
+
+
+class TestGetExpensesCreatedBy:
+    """Tests for get_expenses including createdByAccount."""
+
+    @responses.activate
+    def test_get_expenses_includes_created_by(self, client):
+        """get_expenses query includes createdByAccount field."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "id": "exp1",
+                                "legacyId": 100,
+                                "description": "Test",
+                                "amount": 5000,
+                                "currency": "USD",
+                                "type": "RECEIPT",
+                                "status": "PAID",
+                                "createdAt": "2026-01-01T00:00:00Z",
+                                "payee": {"name": "Max", "slug": "max-ghenis"},
+                                "createdByAccount": {
+                                    "slug": "max-ghenis",
+                                    "name": "Max Ghenis",
+                                },
+                                "tags": [],
+                                "items": [],
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.get_expenses("policyengine")
+        request_body = responses.calls[0].request.body.decode()
+        assert "createdByAccount" in request_body
+        assert result["nodes"][0]["createdByAccount"]["slug"] == "max-ghenis"
+
+
 class TestGetExpensesStatusFix:
     """Tests for fix #1: get_expenses status type should be array."""
 
