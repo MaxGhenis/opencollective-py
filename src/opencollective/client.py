@@ -409,6 +409,9 @@ class OpenCollectiveClient:
             "amount": amount_cents,
         }
         if incurred_at:
+            # Ensure full ISO datetime format (API rejects date-only strings)
+            if "T" not in incurred_at:
+                incurred_at = f"{incurred_at}T00:00:00Z"
             item["incurredAt"] = incurred_at
 
         expense_input = {
@@ -634,6 +637,8 @@ class OpenCollectiveClient:
                 "url": receipt_url,
             }
             if incurred_at:
+                if "T" not in incurred_at:
+                    incurred_at = f"{incurred_at}T00:00:00Z"
                 item["incurredAt"] = incurred_at
 
             expense_input = {
