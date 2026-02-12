@@ -23,6 +23,23 @@ API_URL = "https://api.opencollective.com/graphql/v2"
 UPLOAD_API_URL = "https://opencollective.com/api/graphql/v2"
 
 
+def _ensure_iso_datetime(date_str: str) -> str:
+    """Convert a date-only string to full ISO datetime format.
+
+    The OpenCollective API rejects date-only strings like "2026-01-31"
+    and requires full ISO datetime format like "2026-01-31T00:00:00Z".
+
+    Args:
+        date_str: Date string, either date-only or full ISO datetime.
+
+    Returns:
+        Full ISO datetime string.
+    """
+    if "T" not in date_str:
+        return f"{date_str}T00:00:00Z"
+    return date_str
+
+
 class OpenCollectiveClient:
     """Client for interacting with the OpenCollective GraphQL API."""
 
@@ -368,6 +385,7 @@ class OpenCollectiveClient:
         invoice_url: str | None = None,
         currency: str | None = None,
         incurred_at: str | None = None,
+        item_url: str | None = None,
     ) -> dict:
         """Create a new expense (as a draft).
 
@@ -386,6 +404,8 @@ class OpenCollectiveClient:
                 provided, defaults to the collective's currency.
             incurred_at: Optional date the expense was incurred (ISO format,
                 e.g., "2026-01-31"). Set on the expense item.
+            item_url: Optional URL to attach directly to the expense item
+                (used for receipt files on RECEIPT-type expenses).
 
         Returns:
             Created expense data.
@@ -409,10 +429,9 @@ class OpenCollectiveClient:
             "amount": amount_cents,
         }
         if incurred_at:
-            # Ensure full ISO datetime format (API rejects date-only strings)
-            if "T" not in incurred_at:
-                incurred_at = f"{incurred_at}T00:00:00Z"
-            item["incurredAt"] = incurred_at
+            item["incurredAt"] = _ensure_iso_datetime(incurred_at)
+        if item_url:
+            item["url"] = item_url
 
         expense_input = {
             "description": description,
@@ -531,6 +550,41 @@ class OpenCollectiveClient:
         WeasyHTML(filename=html_path).write_pdf(pdf_path)
         return pdf_path
 
+    def _resolve_payee_and_payout(
+        self,
+        payee_slug: str | None = None,
+        payout_method_id: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Resolve payee slug and payout method for expense submission.
+
+        Auto-detects the payee from the authenticated user if not provided,
+        and selects the first available payout method if not specified.
+
+        Args:
+            payee_slug: Explicit payee slug, or None to auto-detect.
+            payout_method_id: Explicit payout method ID, or None to auto-select.
+
+        Returns:
+            Tuple of (payee_slug, payout_method_id).
+
+        Raises:
+            ValueError: If payee cannot be determined.
+        """
+        if not payee_slug:
+            me = self.get_me()
+            payee_slug = me.get("slug")
+            if not payee_slug:
+                raise ValueError(
+                    "Could not determine payee. Please provide payee_slug."
+                )
+
+        if not payout_method_id:
+            methods = self.get_payout_methods(payee_slug)
+            if methods:
+                payout_method_id = methods[0]["id"]
+
+        return payee_slug, payout_method_id
+
     def submit_reimbursement(
         self,
         collective_slug: str,
@@ -582,88 +636,39 @@ class OpenCollectiveClient:
             ... )
             >>> print(f"Created: https://opencollective.com/policyengine/expenses/{expense['legacyId']}")
         """
-        # Auto-detect payee from authenticated user
-        if not payee_slug:
-            me = self.get_me()
-            payee_slug = me.get("slug")
-            if not payee_slug:
-                raise ValueError(
-                    "Could not determine payee. Please provide payee_slug."
-                )
+        payee_slug, payout_method_id = self._resolve_payee_and_payout(
+            payee_slug, payout_method_id
+        )
 
-        # Auto-select first payout method if not provided
-        if not payout_method_id:
-            methods = self.get_payout_methods(payee_slug)
-            if methods:
-                payout_method_id = methods[0]["id"]
-
-        # Handle file conversion and upload
+        # Handle HTML-to-PDF conversion and upload
         file_to_upload = receipt_file
         temp_pdf = None
 
-        if receipt_file.lower().endswith(".html") or receipt_file.lower().endswith(
-            ".htm"
-        ):
+        if receipt_file.lower().endswith((".html", ".htm")):
             temp_pdf = self._convert_html_to_pdf(receipt_file)
             file_to_upload = temp_pdf
 
         try:
-            # Upload the receipt
             file_info = self.upload_file(file_to_upload, kind="EXPENSE_ITEM")
             receipt_url = file_info.get("url")
 
             if not receipt_url:
                 raise ValueError("Failed to upload receipt file")
 
-            # Create the expense with the receipt attached to the item
-            mutation = """
-            mutation CreateExpense(
-                $expense: ExpenseCreateInput!,
-                $account: AccountReferenceInput!
-            ) {
-                createExpense(expense: $expense, account: $account) {
-                    id
-                    legacyId
-                    description
-                    amount
-                    status
-                }
-            }
-            """
-
-            item = {
-                "description": description,
-                "amount": amount_cents,
-                "url": receipt_url,
-            }
-            if incurred_at:
-                if "T" not in incurred_at:
-                    incurred_at = f"{incurred_at}T00:00:00Z"
-                item["incurredAt"] = incurred_at
-
-            expense_input = {
-                "description": description,
-                "type": "RECEIPT",
-                "payee": {"slug": payee_slug},
-                "items": [item],
-            }
-            if currency:
-                expense_input["currency"] = currency
-            if payout_method_id:
-                expense_input["payoutMethod"] = {"id": payout_method_id}
-            if tags:
-                expense_input["tags"] = tags
-
-            variables = {
-                "account": {"slug": collective_slug},
-                "expense": expense_input,
-            }
-
-            data = self._request(mutation, variables)
-            return data.get("createExpense", {})
+            return self.create_expense(
+                collective_slug=collective_slug,
+                payee_slug=payee_slug,
+                description=description,
+                amount_cents=amount_cents,
+                payout_method_id=payout_method_id,
+                expense_type="RECEIPT",
+                tags=tags,
+                item_url=receipt_url,
+                currency=currency,
+                incurred_at=incurred_at,
+            )
 
         finally:
-            # Clean up temp PDF if created
             if temp_pdf and os.path.exists(temp_pdf):
                 os.unlink(temp_pdf)
 
@@ -715,20 +720,9 @@ class OpenCollectiveClient:
             ...     tags=["consulting"]
             ... )
         """
-        # Auto-detect payee from authenticated user
-        if not payee_slug:
-            me = self.get_me()
-            payee_slug = me.get("slug")
-            if not payee_slug:
-                raise ValueError(
-                    "Could not determine payee. Please provide payee_slug."
-                )
-
-        # Auto-select first payout method if not provided
-        if not payout_method_id:
-            methods = self.get_payout_methods(payee_slug)
-            if methods:
-                payout_method_id = methods[0]["id"]
+        payee_slug, payout_method_id = self._resolve_payee_and_payout(
+            payee_slug, payout_method_id
+        )
 
         # Handle optional invoice file upload
         invoice_url = None
@@ -736,7 +730,6 @@ class OpenCollectiveClient:
             file_info = self.upload_file(invoice_file, kind="EXPENSE_INVOICE")
             invoice_url = file_info.get("url")
 
-        # Create the invoice expense
         return self.create_expense(
             collective_slug=collective_slug,
             payee_slug=payee_slug,

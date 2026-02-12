@@ -458,8 +458,6 @@ class TestUploadFile:
             assert b"operations" in request.body
             assert b"EXPENSE_ATTACHED_FILE" in request.body
         finally:
-            import os
-
             os.unlink(temp_path)
 
     @responses.activate
@@ -541,8 +539,6 @@ class TestUploadFile:
             request = responses.calls[0].request
             assert b"EXPENSE_INVOICE" in request.body
         finally:
-            import os
-
             os.unlink(temp_path)
 
     def test_upload_file_not_found(self):
