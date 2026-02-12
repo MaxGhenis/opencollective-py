@@ -13,7 +13,7 @@ try:
     from weasyprint import HTML as WeasyHTML
 
     HAS_WEASYPRINT = True
-except ImportError:
+except (ImportError, OSError):
     HAS_WEASYPRINT = False
 
 API_URL = "https://api.opencollective.com/graphql/v2"
@@ -366,6 +366,8 @@ class OpenCollectiveClient:
         tags: list[str] | None = None,
         attachment_urls: list[str] | None = None,
         invoice_url: str | None = None,
+        currency: str | None = None,
+        incurred_at: str | None = None,
     ) -> dict:
         """Create a new expense (as a draft).
 
@@ -380,6 +382,10 @@ class OpenCollectiveClient:
             tags: Optional list of tags.
             attachment_urls: Optional list of URLs for receipt/attachment files.
             invoice_url: Optional URL for invoice file (for INVOICE type).
+            currency: Optional currency code (e.g., "GBP", "EUR"). If not
+                provided, defaults to the collective's currency.
+            incurred_at: Optional date the expense was incurred (ISO format,
+                e.g., "2026-01-31"). Set on the expense item.
 
         Returns:
             Created expense data.
@@ -398,17 +404,21 @@ class OpenCollectiveClient:
             }
         }
         """
+        item = {
+            "description": description,
+            "amount": amount_cents,
+        }
+        if incurred_at:
+            item["incurredAt"] = incurred_at
+
         expense_input = {
             "description": description,
             "type": expense_type,
             "payee": {"slug": payee_slug},
-            "items": [
-                {
-                    "description": description,
-                    "amount": amount_cents,
-                }
-            ],
+            "items": [item],
         }
+        if currency:
+            expense_input["currency"] = currency
         if payout_method_id:
             expense_input["payoutMethod"] = {"id": payout_method_id}
         if tags:
@@ -527,6 +537,8 @@ class OpenCollectiveClient:
         payee_slug: str | None = None,
         payout_method_id: str | None = None,
         tags: list[str] | None = None,
+        currency: str | None = None,
+        incurred_at: str | None = None,
     ) -> dict:
         """Submit a reimbursement expense with a receipt.
 
@@ -549,6 +561,10 @@ class OpenCollectiveClient:
             payee_slug: Your account slug. Auto-detected if not provided.
             payout_method_id: Payout method ID. Uses first available if not provided.
             tags: Optional list of tags for categorization.
+            currency: Optional currency code (e.g., "GBP", "EUR"). Defaults
+                to the collective's currency if not provided.
+            incurred_at: Optional date the expense was incurred (ISO format,
+                e.g., "2026-01-31").
 
         Returns:
             Created expense data with id, legacyId, description, status.
@@ -612,18 +628,22 @@ class OpenCollectiveClient:
             }
             """
 
+            item = {
+                "description": description,
+                "amount": amount_cents,
+                "url": receipt_url,
+            }
+            if incurred_at:
+                item["incurredAt"] = incurred_at
+
             expense_input = {
                 "description": description,
                 "type": "RECEIPT",
                 "payee": {"slug": payee_slug},
-                "items": [
-                    {
-                        "description": description,
-                        "amount": amount_cents,
-                        "url": receipt_url,
-                    }
-                ],
+                "items": [item],
             }
+            if currency:
+                expense_input["currency"] = currency
             if payout_method_id:
                 expense_input["payoutMethod"] = {"id": payout_method_id}
             if tags:
@@ -651,6 +671,8 @@ class OpenCollectiveClient:
         payout_method_id: str | None = None,
         invoice_file: str | None = None,
         tags: list[str] | None = None,
+        currency: str | None = None,
+        incurred_at: str | None = None,
     ) -> dict:
         """Submit an invoice expense.
 
@@ -672,6 +694,10 @@ class OpenCollectiveClient:
             payout_method_id: Payout method ID. Uses first available if not provided.
             invoice_file: Optional path to invoice PDF for documentation.
             tags: Optional list of tags for categorization.
+            currency: Optional currency code (e.g., "GBP", "EUR"). Defaults
+                to the collective's currency if not provided.
+            incurred_at: Optional date the expense was incurred (ISO format,
+                e.g., "2026-01-31").
 
         Returns:
             Created expense data with id, legacyId, description, status.
@@ -715,4 +741,6 @@ class OpenCollectiveClient:
             expense_type="INVOICE",
             tags=tags,
             invoice_url=invoice_url,
+            currency=currency,
+            incurred_at=incurred_at,
         )
