@@ -217,6 +217,103 @@ def create_server() -> "Server":
                     "required": ["slug"],
                 },
             ),
+            Tool(
+                name="submit_multi_item_reimbursement",
+                description=(
+                    "Submit a reimbursement with multiple receipt items. "
+                    "Each item has its own amount, description, receipt file, "
+                    "and date. Use when you have multiple receipts for one "
+                    "expense (e.g., a trip with hotel, taxi, meals)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "collective_slug": {
+                            "type": "string",
+                            "description": ("Collective slug (e.g., 'policyengine')"),
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Overall description of the expense",
+                        },
+                        "items": {
+                            "type": "array",
+                            "description": "List of receipt line items",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "amount_cents": {
+                                        "type": "integer",
+                                        "description": (
+                                            "Amount in cents (e.g., 10000 "
+                                            "for $100.00)"
+                                        ),
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": (
+                                            "Description of this line item"
+                                        ),
+                                    },
+                                    "receipt_file": {
+                                        "type": "string",
+                                        "description": (
+                                            "Path to receipt file " "(PDF, PNG, JPG)"
+                                        ),
+                                    },
+                                    "incurred_at": {
+                                        "type": "string",
+                                        "description": (
+                                            "Date the expense was incurred "
+                                            "(ISO format, e.g., '2026-01-31')"
+                                        ),
+                                    },
+                                },
+                                "required": [
+                                    "amount_cents",
+                                    "description",
+                                    "receipt_file",
+                                    "incurred_at",
+                                ],
+                            },
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional tags for categorization",
+                        },
+                        "currency": {
+                            "type": "string",
+                            "description": (
+                                "Optional currency code (e.g., 'GBP', 'EUR'). "
+                                "Defaults to collective currency."
+                            ),
+                        },
+                    },
+                    "required": ["collective_slug", "description", "items"],
+                },
+            ),
+            Tool(
+                name="get_expense_items",
+                description=(
+                    "Get the line items (with receipt URLs) for a specific "
+                    "expense. Returns item descriptions, amounts, dates, "
+                    "and attached file URLs."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "expense_id": {
+                            "type": "integer",
+                            "description": (
+                                "The expense legacy ID (numeric ID visible "
+                                "in the URL)"
+                            ),
+                        },
+                    },
+                    "required": ["expense_id"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -320,6 +417,78 @@ def create_server() -> "Server":
                     f"  Currency: {collective.get('currency')}\n"
                     f"  Description: {collective.get('description', 'N/A')}"
                 )
+
+            elif name == "submit_multi_item_reimbursement":
+                expense = client.submit_multi_item_reimbursement(
+                    collective_slug=arguments["collective_slug"],
+                    description=arguments["description"],
+                    items=arguments["items"],
+                    payee_slug=arguments.get("payee_slug"),
+                    payout_method_id=arguments.get("payout_method_id"),
+                    tags=arguments.get("tags"),
+                    currency=arguments.get("currency"),
+                )
+                total_cents = sum(i["amount_cents"] for i in arguments["items"])
+                url = _expense_url(
+                    arguments["collective_slug"],
+                    expense.get("legacyId"),
+                )
+                return _text(
+                    f"\u2713 Multi-item reimbursement submitted!\n"
+                    f"  ID: {expense.get('legacyId')}\n"
+                    f"  Items: {len(arguments['items'])}\n"
+                    f"  Total: ${total_cents / 100:.2f}\n"
+                    f"  Status: {expense.get('status')}\n"
+                    f"  URL: {url}"
+                )
+
+            elif name == "get_expense_items":
+                expense_id = arguments["expense_id"]
+                query = """
+                query GetExpense($expense: ExpenseReferenceInput!) {
+                    expense(expense: $expense) {
+                        id
+                        legacyId
+                        description
+                        status
+                        items {
+                            id
+                            description
+                            amount
+                            incurredAt
+                            url
+                        }
+                    }
+                }
+                """
+                data = client._request(query, {"expense": {"legacyId": expense_id}})
+                expense = data.get("expense", {})
+                items = expense.get("items", [])
+
+                if not items:
+                    return _text(
+                        f"No items found for expense "
+                        f"#{expense.get('legacyId', expense_id)}."
+                    )
+
+                lines = [
+                    f"Expense #{expense.get('legacyId')} - "
+                    f"{expense.get('description', 'N/A')}\n"
+                    f"Status: {expense.get('status', 'UNKNOWN')}\n"
+                    f"{len(items)} item(s):\n"
+                ]
+                for item in items:
+                    amount = item.get("amount", 0) / 100
+                    desc = item.get("description", "No description")
+                    date = item.get("incurredAt", "N/A")
+                    url = item.get("url", "No URL")
+                    lines.append(
+                        f"  - {desc}: ${amount:.2f}\n"
+                        f"    Date: {date}\n"
+                        f"    URL: {url}"
+                    )
+
+                return _text("\n".join(lines))
 
             else:
                 return _text(f"Unknown tool: {name}")
