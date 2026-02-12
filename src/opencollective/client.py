@@ -256,7 +256,7 @@ class OpenCollectiveClient:
             $account: AccountReferenceInput!,
             $limit: Int!,
             $offset: Int!,
-            $status: ExpenseStatusFilter,
+            $status: [ExpenseStatusFilter],
             $dateFrom: DateTime
         ) {
             expenses(
@@ -279,6 +279,7 @@ class OpenCollectiveClient:
                     createdAt
                     payee { name slug }
                     tags
+                    items { id description amount url incurredAt }
                 }
             }
         }
@@ -289,7 +290,7 @@ class OpenCollectiveClient:
             "offset": offset,
         }
         if status:
-            variables["status"] = status
+            variables["status"] = [status]
         if date_from:
             variables["dateFrom"] = date_from
 
@@ -683,6 +684,124 @@ class OpenCollectiveClient:
         finally:
             if temp_pdf and os.path.exists(temp_pdf):
                 os.unlink(temp_pdf)
+
+    def submit_multi_item_reimbursement(
+        self,
+        collective_slug: str,
+        description: str,
+        items: list[dict],
+        payee_slug: str | None = None,
+        payout_method_id: str | None = None,
+        tags: list[str] | None = None,
+        currency: str | None = None,
+    ) -> dict:
+        """Submit a reimbursement with multiple items and receipts.
+
+        This is a high-level method that handles:
+        - Auto-detecting payee from authenticated user if not provided
+        - Auto-selecting first payout method if not provided
+        - Uploading each item's receipt file separately
+        - Creating a single RECEIPT-type expense with multiple items
+
+        Each item in the list should be a dict with:
+        - amount_cents (int): Amount in cents for this item.
+        - description (str): Description of this line item.
+        - receipt_file (str): Path to the receipt file (PDF, PNG, JPG).
+        - incurred_at (str): Date the expense was incurred (ISO format).
+
+        Args:
+            collective_slug: The collective's slug (e.g., "policyengine").
+            description: Overall description of the expense.
+            items: List of item dicts, each with amount_cents, description,
+                receipt_file, and incurred_at.
+            payee_slug: Your account slug. Auto-detected if not provided.
+            payout_method_id: Payout method ID. Uses first available if not provided.
+            tags: Optional list of tags for categorization.
+            currency: Optional currency code (e.g., "GBP", "EUR"). Defaults
+                to the collective's currency if not provided.
+
+        Returns:
+            Created expense data with id, legacyId, description, status.
+
+        Example:
+            >>> expense = client.submit_multi_item_reimbursement(
+            ...     collective_slug="policyengine",
+            ...     description="Conference travel",
+            ...     items=[
+            ...         {
+            ...             "amount_cents": 50000,
+            ...             "description": "Flight ticket",
+            ...             "receipt_file": "/path/to/flight_receipt.pdf",
+            ...             "incurred_at": "2026-03-01",
+            ...         },
+            ...         {
+            ...             "amount_cents": 25000,
+            ...             "description": "Hotel stay",
+            ...             "receipt_file": "/path/to/hotel_receipt.pdf",
+            ...             "incurred_at": "2026-03-02",
+            ...         },
+            ...     ],
+            ...     tags=["travel", "conference"],
+            ... )
+        """
+        payee_slug, payout_method_id = self._resolve_payee_and_payout(
+            payee_slug, payout_method_id
+        )
+
+        # Upload each item's receipt and build the expense items list
+        expense_items = []
+        for item in items:
+            file_info = self.upload_file(item["receipt_file"], kind="EXPENSE_ITEM")
+            receipt_url = file_info.get("url")
+            if not receipt_url:
+                raise ValueError(
+                    f"Failed to upload receipt file for item: {item['description']}"
+                )
+
+            expense_item = {
+                "description": item["description"],
+                "amount": item["amount_cents"],
+                "url": receipt_url,
+            }
+            if item.get("incurred_at"):
+                expense_item["incurredAt"] = _ensure_iso_datetime(item["incurred_at"])
+            expense_items.append(expense_item)
+
+        # Build the expense mutation input
+        mutation = """
+        mutation CreateExpense(
+            $expense: ExpenseCreateInput!,
+            $account: AccountReferenceInput!
+        ) {
+            createExpense(expense: $expense, account: $account) {
+                id
+                legacyId
+                description
+                amount
+                status
+            }
+        }
+        """
+        expense_input: dict[str, Any] = {
+            "description": description,
+            "type": "RECEIPT",
+            "payee": {"slug": payee_slug},
+            "items": expense_items,
+        }
+        if currency:
+            expense_input["currency"] = currency
+        if payout_method_id:
+            expense_input["payoutMethod"] = {"id": payout_method_id}
+        if tags:
+            expense_input["tags"] = tags
+
+        variables = {
+            "account": {"slug": collective_slug},
+            "expense": expense_input,
+        }
+
+        data = self._request(mutation, variables)
+        return data.get("createExpense", {})
 
     def submit_invoice(
         self,
