@@ -1,28 +1,21 @@
 """Tests for OpenCollective MCP server."""
 
-import json
-
 import pytest
 
 # Skip all tests if MCP not installed
 pytest.importorskip("mcp")
 
 
-@pytest.fixture
-def mock_token(tmp_path, monkeypatch):
-    """Create a mock token file."""
-    token_dir = tmp_path / ".config" / "opencollective"
-    token_dir.mkdir(parents=True)
-    token_file = token_dir / "token.json"
-    token_file.write_text(json.dumps({"access_token": "test_token"}))
-    monkeypatch.setattr("opencollective.mcp_server.TOKEN_FILE", str(token_file))
-    return str(token_file)
+@pytest.fixture(autouse=True)
+def _patch_mcp_token(mock_token, monkeypatch):
+    """Point the MCP server's TOKEN_FILE to the shared mock token."""
+    monkeypatch.setattr("opencollective.mcp_server.TOKEN_FILE", mock_token)
 
 
 class TestMCPServer:
     """Tests for MCP server creation."""
 
-    def test_create_server(self, mock_token):
+    def test_create_server(self):
         """Can create MCP server."""
         from opencollective.mcp_server import create_server
 
@@ -30,7 +23,7 @@ class TestMCPServer:
         assert server is not None
         assert server.name == "opencollective"
 
-    def test_server_has_name(self, mock_token):
+    def test_server_has_name(self):
         """Server has correct name."""
         from opencollective.mcp_server import create_server
 
@@ -41,8 +34,8 @@ class TestMCPServer:
 class TestMCPImports:
     """Tests for MCP module imports."""
 
-    def test_has_weasyprint_flag(self):
-        """Module tracks weasyprint availability."""
+    def test_has_mcp_flag(self):
+        """Module tracks MCP availability."""
         from opencollective.mcp_server import HAS_MCP
 
         assert HAS_MCP is True
@@ -59,7 +52,7 @@ class TestMCPImports:
         with pytest.raises(ValueError, match="No token found"):
             get_client()
 
-    def test_get_client_with_token(self, mock_token):
+    def test_get_client_with_token(self):
         """get_client returns client when token exists."""
         from opencollective.mcp_server import get_client
 

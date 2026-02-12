@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import tempfile
+from contextlib import contextmanager
 from typing import Any, BinaryIO
 
 import requests
@@ -23,6 +24,21 @@ API_URL = "https://api.opencollective.com/graphql/v2"
 UPLOAD_API_URL = "https://opencollective.com/api/graphql/v2"
 
 
+def _check_graphql_errors(result: dict, prefix: str = "API") -> None:
+    """Raise if a GraphQL response contains errors.
+
+    Args:
+        result: Parsed JSON response from the GraphQL endpoint.
+        prefix: Label for the error message (e.g. "API", "Upload").
+
+    Raises:
+        Exception: If the response contains a GraphQL errors array.
+    """
+    if "errors" in result:
+        msg = result["errors"][0].get("message", "Unknown error")
+        raise Exception(f"{prefix} error: {msg}")
+
+
 def _ensure_iso_datetime(date_str: str) -> str:
     """Convert a date-only string to full ISO datetime format.
 
@@ -38,6 +54,34 @@ def _ensure_iso_datetime(date_str: str) -> str:
     if "T" not in date_str:
         return f"{date_str}T00:00:00Z"
     return date_str
+
+
+@contextmanager
+def _open_file(file: str | BinaryIO, filename: str | None = None):
+    """Context manager that yields (file_obj, resolved_filename).
+
+    Handles both file paths and file-like objects, closing the file
+    only if it was opened by this function.
+
+    Args:
+        file: File path (str) or file-like object (BinaryIO).
+        filename: Optional filename override.
+
+    Yields:
+        Tuple of (file_object, resolved_filename).
+    """
+    if isinstance(file, str):
+        if not os.path.exists(file):
+            raise FileNotFoundError(f"File not found: {file}")
+        resolved_name = filename or os.path.basename(file)
+        file_obj = open(file, "rb")
+        try:
+            yield file_obj, resolved_name
+        finally:
+            file_obj.close()
+    else:
+        resolved_name = filename or getattr(file, "name", "upload")
+        yield file, resolved_name
 
 
 class OpenCollectiveClient:
@@ -83,11 +127,7 @@ class OpenCollectiveClient:
         response.raise_for_status()
 
         result = response.json()
-        if "errors" in result:
-            errors = result["errors"]
-            msg = errors[0].get("message", "Unknown error")
-            raise Exception(f"API error: {msg}")
-
+        _check_graphql_errors(result, "API")
         return result.get("data", {})
 
     def upload_file(
@@ -115,23 +155,10 @@ class OpenCollectiveClient:
             >>> print(file_info["url"])
             https://opencollective-production.s3.us-west-1.amazonaws.com/...
         """
-        # Handle file path or file-like object
-        if isinstance(file, str):
-            if not os.path.exists(file):
-                raise FileNotFoundError(f"File not found: {file}")
-            filename = filename or os.path.basename(file)
-            file_obj = open(file, "rb")
-            should_close = True
-        else:
-            file_obj = file
-            filename = filename or getattr(file, "name", "upload")
-            should_close = False
-
-        try:
-            # Determine MIME type from filename
-            mime_type, _ = mimetypes.guess_type(filename)
-            if mime_type is None:
-                mime_type = "application/octet-stream"
+        with _open_file(file, filename) as (file_obj, resolved_name):
+            mime_type = (
+                mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
+            )
 
             # GraphQL multipart request spec:
             # https://github.com/jaydenseric/graphql-multipart-request-spec
@@ -155,15 +182,12 @@ class OpenCollectiveClient:
                     "variables": {"files": [{"kind": kind, "file": None}]},
                 }
             )
-
-            # Map tells server which variable path the file corresponds to
             file_map = json.dumps({"0": ["variables.files.0.file"]})
 
-            # Build multipart form data
             files = {
                 "operations": (None, operations, "application/json"),
                 "map": (None, file_map, "application/json"),
-                "0": (filename, file_obj, mime_type),
+                "0": (resolved_name, file_obj, mime_type),
             }
 
             headers = {"Authorization": f"Bearer {self.access_token}"}
@@ -171,30 +195,18 @@ class OpenCollectiveClient:
             response.raise_for_status()
 
             result = response.json()
-            if "errors" in result:
-                errors = result["errors"]
-                msg = errors[0].get("message", "Unknown error")
-                raise Exception(f"Upload error: {msg}")
+            _check_graphql_errors(result, "Upload")
 
-            data = result.get("data", {})
-            upload_result = data.get("uploadFile", [])
-            # uploadFile returns a list since mutation accepts multiple files
-            if isinstance(upload_result, list) and len(upload_result) > 0:
-                file_info = upload_result[0].get("file", {})
+            # uploadFile returns a list (mutation accepts multiple files) or a dict
+            upload_result = result.get("data", {}).get("uploadFile", [])
+            if isinstance(upload_result, list):
+                file_info = upload_result[0].get("file", {}) if upload_result else {}
             else:
                 file_info = upload_result.get("file", {}) if upload_result else {}
 
             return {
-                "url": file_info.get("url"),
-                "id": file_info.get("id"),
-                "name": file_info.get("name"),
-                "type": file_info.get("type"),
-                "size": file_info.get("size"),
+                key: file_info.get(key) for key in ("url", "id", "name", "type", "size")
             }
-
-        finally:
-            if should_close:
-                file_obj.close()
 
     def get_collective(self, slug: str) -> dict:
         """Get information about a collective.
