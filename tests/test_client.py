@@ -1127,3 +1127,494 @@ class TestSubmitInvoice:
             assert result["legacyId"] == 333
         finally:
             os.unlink(temp_path)
+
+
+class TestGetExpensesStatusFix:
+    """Tests for fix #1: get_expenses status type should be array."""
+
+    @responses.activate
+    def test_get_expenses_status_variable_type_is_array(self, client):
+        """GraphQL query should use [ExpenseStatusFilter] array type."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "id": "exp1",
+                                "legacyId": 100,
+                                "description": "Test",
+                                "amount": 5000,
+                                "currency": "USD",
+                                "type": "RECEIPT",
+                                "status": "PENDING",
+                                "createdAt": "2026-01-01T00:00:00Z",
+                                "payee": {"name": "Test User", "slug": "test-user"},
+                                "tags": [],
+                                "items": [],
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client.get_expenses("test-collective", status="PENDING")
+
+        request_body = responses.calls[0].request.body.decode()
+        # The variable type declaration must use array syntax
+        assert "[ExpenseStatusFilter]" in request_body
+
+    @responses.activate
+    def test_get_expenses_status_sent_as_array(self, client):
+        """When a status is provided, it should be sent as a single-element array."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 0,
+                        "nodes": [],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client.get_expenses("test-collective", status="APPROVED")
+
+        import json as json_mod
+
+        request_body = json_mod.loads(responses.calls[0].request.body.decode())
+        # The status variable must be a list
+        assert isinstance(request_body["variables"]["status"], list)
+        assert request_body["variables"]["status"] == ["APPROVED"]
+
+
+class TestGetExpensesItems:
+    """Tests for fix #3: get_expenses should include items in the response."""
+
+    @responses.activate
+    def test_get_expenses_includes_items_in_query(self, client):
+        """Query should request items with standard fields."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "id": "exp1",
+                                "legacyId": 100,
+                                "description": "Cloud hosting",
+                                "amount": 15000,
+                                "currency": "USD",
+                                "type": "RECEIPT",
+                                "status": "PAID",
+                                "createdAt": "2026-01-15T00:00:00Z",
+                                "payee": {"name": "Dev", "slug": "dev"},
+                                "tags": ["hosting"],
+                                "items": [
+                                    {
+                                        "id": "item1",
+                                        "description": "January hosting",
+                                        "amount": 15000,
+                                        "url": "https://example.com/receipt.pdf",
+                                        "incurredAt": "2026-01-15T00:00:00Z",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.get_expenses("test-collective")
+
+        # The query must include items subfields
+        request_body = responses.calls[0].request.body.decode()
+        assert "items" in request_body
+
+        # The response should contain items
+        expense = result["nodes"][0]
+        assert "items" in expense
+        assert len(expense["items"]) == 1
+        assert expense["items"][0]["id"] == "item1"
+        assert expense["items"][0]["description"] == "January hosting"
+        assert expense["items"][0]["amount"] == 15000
+
+    @responses.activate
+    def test_get_expenses_items_fields_in_query(self, client):
+        """Items subquery includes all required fields."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 0,
+                        "nodes": [],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        client.get_expenses("test-collective")
+
+        request_body = responses.calls[0].request.body.decode()
+        # Verify the query requests all required item fields
+        assert "items" in request_body
+        # Check that the query includes the expected subfields for items
+        # These should appear in the query string after "items {"
+        for field in ["id", "description", "amount", "url", "incurredAt"]:
+            assert field in request_body
+
+
+class TestSubmitMultiItemReimbursement:
+    """Tests for feature #2: submit_multi_item_reimbursement method."""
+
+    @responses.activate
+    def test_submit_multi_item_reimbursement_basic(self, client):
+        """Can submit a reimbursement with multiple items and receipts."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"id": "user-123", "slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "account": {
+                        "payoutMethods": [{"id": "pm-123", "type": "BANK_ACCOUNT"}]
+                    }
+                }
+            },
+            status=200,
+        )
+        # Mock two file uploads (one per item)
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {
+                            "file": {
+                                "id": "file-1",
+                                "url": "https://example.com/receipt1.pdf",
+                            }
+                        }
+                    ]
+                }
+            },
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {
+                            "file": {
+                                "id": "file-2",
+                                "url": "https://example.com/receipt2.pdf",
+                            }
+                        }
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock createExpense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-multi",
+                        "legacyId": 50000,
+                        "description": "Conference travel",
+                        "amount": 75000,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f1:
+            f1.write(b"receipt 1 pdf")
+            path1 = f1.name
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f2:
+            f2.write(b"receipt 2 pdf")
+            path2 = f2.name
+
+        try:
+            result = client.submit_multi_item_reimbursement(
+                collective_slug="policyengine",
+                description="Conference travel",
+                items=[
+                    {
+                        "amount_cents": 50000,
+                        "description": "Flight ticket",
+                        "receipt_file": path1,
+                        "incurred_at": "2026-03-01",
+                    },
+                    {
+                        "amount_cents": 25000,
+                        "description": "Hotel stay",
+                        "receipt_file": path2,
+                        "incurred_at": "2026-03-02",
+                    },
+                ],
+                tags=["travel", "conference"],
+            )
+
+            assert result["legacyId"] == 50000
+            assert result["status"] == "PENDING"
+
+            # Verify the createExpense request has two items
+            import json as json_mod
+
+            create_request = json_mod.loads(responses.calls[4].request.body.decode())
+            expense_input = create_request["variables"]["expense"]
+            assert len(expense_input["items"]) == 2
+            assert expense_input["items"][0]["description"] == "Flight ticket"
+            assert expense_input["items"][0]["amount"] == 50000
+            assert expense_input["items"][1]["description"] == "Hotel stay"
+            assert expense_input["items"][1]["amount"] == 25000
+            assert expense_input["type"] == "RECEIPT"
+        finally:
+            os.unlink(path1)
+            os.unlink(path2)
+
+    @responses.activate
+    def test_submit_multi_item_with_explicit_payee(self, client):
+        """Can submit multi-item reimbursement with explicit payee and payout method."""
+        # No get_me or get_payout_methods needed when both are provided
+        # Mock file upload
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {"file": {"id": "f1", "url": "https://example.com/r.pdf"}}
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock createExpense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-explicit",
+                        "legacyId": 50001,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"receipt pdf")
+            path = f.name
+
+        try:
+            result = client.submit_multi_item_reimbursement(
+                collective_slug="policyengine",
+                description="Single item multi method",
+                items=[
+                    {
+                        "amount_cents": 10000,
+                        "description": "Software license",
+                        "receipt_file": path,
+                        "incurred_at": "2026-02-01",
+                    },
+                ],
+                payee_slug="explicit-user",
+                payout_method_id="pm-456",
+            )
+            assert result["legacyId"] == 50001
+        finally:
+            os.unlink(path)
+
+    @responses.activate
+    def test_submit_multi_item_with_currency(self, client):
+        """Can submit multi-item reimbursement with explicit currency."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"slug": "max-ghenis"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
+            status=200,
+        )
+        # Mock file upload
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {"file": {"id": "f1", "url": "https://example.com/r.pdf"}}
+                    ]
+                }
+            },
+            status=200,
+        )
+        # Mock createExpense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-gbp-multi",
+                        "legacyId": 50002,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"pdf")
+            path = f.name
+
+        try:
+            result = client.submit_multi_item_reimbursement(
+                collective_slug="policyengine",
+                description="GBP expense",
+                items=[
+                    {
+                        "amount_cents": 5000,
+                        "description": "UK purchase",
+                        "receipt_file": path,
+                        "incurred_at": "2026-01-15",
+                    },
+                ],
+                currency="GBP",
+            )
+            assert result["legacyId"] == 50002
+
+            import json as json_mod
+
+            create_request = json_mod.loads(responses.calls[3].request.body.decode())
+            assert create_request["variables"]["expense"].get("currency") == "GBP"
+        finally:
+            os.unlink(path)
+
+    @responses.activate
+    def test_submit_multi_item_uploads_each_receipt(self, client):
+        """Each item's receipt_file should be uploaded separately."""
+        # Mock get_me
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"me": {"slug": "test-user"}}},
+            status=200,
+        )
+        # Mock get_payout_methods
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={"data": {"account": {"payoutMethods": [{"id": "pm-1"}]}}},
+            status=200,
+        )
+        # Mock 3 file uploads
+        for i in range(3):
+            responses.add(
+                responses.POST,
+                UPLOAD_URL,
+                json={
+                    "data": {
+                        "uploadFile": [
+                            {
+                                "file": {
+                                    "id": f"file-{i}",
+                                    "url": f"https://example.com/receipt{i}.pdf",
+                                }
+                            }
+                        ]
+                    }
+                },
+                status=200,
+            )
+        # Mock createExpense
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "createExpense": {
+                        "id": "exp-3items",
+                        "legacyId": 50003,
+                        "status": "PENDING",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        temp_paths = []
+        try:
+            items = []
+            for i in range(3):
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+                    f.write(f"receipt {i}".encode())
+                    temp_paths.append(f.name)
+                    items.append(
+                        {
+                            "amount_cents": 1000 * (i + 1),
+                            "description": f"Item {i + 1}",
+                            "receipt_file": f.name,
+                            "incurred_at": f"2026-01-0{i + 1}",
+                        }
+                    )
+
+            result = client.submit_multi_item_reimbursement(
+                collective_slug="policyengine",
+                description="Three items",
+                items=items,
+            )
+
+            assert result["legacyId"] == 50003
+            # 2 API calls (get_me, get_payout) + 3 uploads + 1 create = 6
+            assert len(responses.calls) == 6
+            # Verify 3 upload calls went to UPLOAD_URL
+            upload_calls = [c for c in responses.calls if c.request.url == UPLOAD_URL]
+            assert len(upload_calls) == 3
+        finally:
+            for p in temp_paths:
+                os.unlink(p)
