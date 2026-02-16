@@ -578,11 +578,11 @@ class OpenCollectiveClient:
         data = self._request(query)
         return data.get("me", {})
 
-    def delete_expense(self, expense_id: str) -> dict:
+    def delete_expense(self, expense_id: str | int) -> dict:
         """Delete an expense (only works for DRAFT or PENDING expenses you created).
 
         Args:
-            expense_id: The expense ID (not legacy ID).
+            expense_id: The expense ID (GraphQL string) or legacy ID (integer).
 
         Returns:
             Dict with id and legacyId of deleted expense.
@@ -595,7 +595,11 @@ class OpenCollectiveClient:
             }
         }
         """
-        data = self._request(mutation, {"expense": {"id": expense_id}})
+        if isinstance(expense_id, int) or expense_id.isdigit():
+            ref = {"legacyId": int(expense_id)}
+        else:
+            ref = {"id": expense_id}
+        data = self._request(mutation, {"expense": ref})
         return data.get("deleteExpense", {})
 
     def _convert_html_to_pdf(self, html_path: str) -> str:
