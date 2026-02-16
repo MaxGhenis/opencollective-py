@@ -18,6 +18,7 @@ except (ImportError, OSError):
     HAS_WEASYPRINT = False
 
 API_URL = "https://api.opencollective.com/graphql/v2"
+TOKEN_FILE = os.path.expanduser("~/.config/opencollective/token.json")
 # File uploads must go through the frontend proxy due to infrastructure issues
 # with multipart handling on the direct API endpoint.
 # See: https://github.com/opencollective/opencollective-api/issues/11293
@@ -106,6 +107,27 @@ class OpenCollectiveClient:
                 "Authorization": f"Bearer {access_token}",
             }
         )
+
+    @classmethod
+    def from_token_file(cls, path: str | None = None) -> "OpenCollectiveClient":
+        """Create a client from a saved token file.
+
+        Args:
+            path: Path to token JSON file.
+                Defaults to ~/.config/opencollective/token.json.
+
+        Returns:
+            Authenticated client instance.
+
+        Raises:
+            FileNotFoundError: If the token file doesn't exist.
+        """
+        token_path = path or TOKEN_FILE
+        if not os.path.exists(token_path):
+            raise FileNotFoundError(f"Token file not found: {token_path}")
+        with open(token_path) as f:
+            token_data = json.load(f)
+        return cls(access_token=token_data["access_token"])
 
     def _request(self, query: str, variables: dict[str, Any] = None) -> dict:
         """Make a GraphQL request.
@@ -278,6 +300,7 @@ class OpenCollectiveClient:
                     status
                     createdAt
                     payee { name slug }
+                    createdByAccount { name slug }
                     tags
                     items { id description amount url incurredAt }
                 }
@@ -297,22 +320,52 @@ class OpenCollectiveClient:
         data = self._request(query, variables)
         return data.get("expenses", {"totalCount": 0, "nodes": []})
 
-    def approve_expense(self, expense_id: str) -> dict:
+    def get_expense(self, legacy_id: int) -> dict | None:
+        """Get a single expense by its legacy ID.
+
+        Args:
+            legacy_id: The expense's legacy (numeric) ID.
+
+        Returns:
+            Expense data dict, or None if not found.
+        """
+        query = """
+        query GetExpense($id: Int!) {
+            expense(expense: { legacyId: $id }) {
+                id
+                legacyId
+                description
+                amount
+                currency
+                type
+                status
+                createdAt
+                payee { name slug }
+                createdByAccount { name slug }
+                tags
+                items { id description amount url incurredAt }
+            }
+        }
+        """
+        data = self._request(query, {"id": legacy_id})
+        return data.get("expense")
+
+    def approve_expense(self, expense_id: str | int) -> dict:
         """Approve a pending expense.
 
         Args:
-            expense_id: The expense ID (not legacy ID).
+            expense_id: The expense ID (string) or legacy ID (integer).
 
         Returns:
             Updated expense data.
         """
         return self._process_expense(expense_id, "APPROVE")
 
-    def reject_expense(self, expense_id: str, message: str | None = None) -> dict:
+    def reject_expense(self, expense_id: str | int, message: str | None = None) -> dict:
         """Reject a pending expense.
 
         Args:
-            expense_id: The expense ID.
+            expense_id: The expense ID (string) or legacy ID (integer).
             message: Optional rejection message.
 
         Returns:
@@ -321,12 +374,12 @@ class OpenCollectiveClient:
         return self._process_expense(expense_id, "REJECT", message)
 
     def _process_expense(
-        self, expense_id: str, action: str, message: str | None = None
+        self, expense_id: str | int, action: str, message: str | None = None
     ) -> dict:
         """Process an expense (approve, reject, etc.).
 
         Args:
-            expense_id: The expense ID.
+            expense_id: The expense ID (string) or legacy ID (integer).
             action: Action to take (APPROVE, REJECT, etc.).
             message: Optional message for the action.
 
@@ -347,8 +400,12 @@ class OpenCollectiveClient:
             }
         }
         """
+        if isinstance(expense_id, int):
+            expense_ref = {"legacyId": expense_id}
+        else:
+            expense_ref = {"id": expense_id}
         variables = {
-            "expense": {"id": expense_id},
+            "expense": expense_ref,
             "action": action,
         }
         if message:
@@ -521,11 +578,11 @@ class OpenCollectiveClient:
         data = self._request(query)
         return data.get("me", {})
 
-    def delete_expense(self, expense_id: str) -> dict:
+    def delete_expense(self, expense_id: str | int) -> dict:
         """Delete an expense (only works for DRAFT or PENDING expenses you created).
 
         Args:
-            expense_id: The expense ID (not legacy ID).
+            expense_id: The expense ID (GraphQL string) or legacy ID (integer).
 
         Returns:
             Dict with id and legacyId of deleted expense.
@@ -538,7 +595,11 @@ class OpenCollectiveClient:
             }
         }
         """
-        data = self._request(mutation, {"expense": {"id": expense_id}})
+        if isinstance(expense_id, int) or expense_id.isdigit():
+            ref = {"legacyId": int(expense_id)}
+        else:
+            ref = {"id": expense_id}
+        data = self._request(mutation, {"expense": ref})
         return data.get("deleteExpense", {})
 
     def _convert_html_to_pdf(self, html_path: str) -> str:
