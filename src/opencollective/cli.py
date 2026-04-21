@@ -56,31 +56,70 @@ def cli():
 @cli.command()
 @click.argument("description")
 @click.argument("amount", type=float)
-@click.argument("receipt", type=click.Path(exists=True))
+@click.argument("receipt", type=click.Path(exists=True), required=False)
 @click.option(
     "-c", "--collective", required=True, help="Collective slug (e.g., policyengine)"
 )
 @click.option("-t", "--tag", multiple=True, help="Tags for the expense")
+@click.option("--currency", help="Currency code (e.g., GBP). Defaults to collective's.")
+@click.option("--incurred-at", help="Date incurred (YYYY-MM-DD). Defaults to today.")
+@click.option("-i", "--item", multiple=True,
+              help='Multi-item: pass multiple times as "description|amount|receipt_file|YYYY-MM-DD"')
 @handle_errors
-def reimbursement(description: str, amount: float, receipt: str, collective: str, tag):
-    """Submit a reimbursement expense with a receipt.
+def reimbursement(description: str, amount: float, receipt: str | None,
+                  collective: str, tag, currency: str | None,
+                  incurred_at: str | None, item):
+    """Submit a reimbursement expense with one or more receipts.
 
-    Example:
+    Single-item:
         oc reimbursement "NASI Dues 2026" 325.00 receipt.pdf -c policyengine
+
+    Multi-item (each -i is "desc|amount|file|date"):
+        oc reimbursement "Travel April 2026" 0 -c policyengine \\
+          -i "Flight|450|flight.pdf|2026-04-01" \\
+          -i "Hotel|320|hotel.pdf|2026-04-02"
     """
     client = get_client()
-    amount_cents = int(amount * 100)
     tags = list(tag) if tag else None
 
-    click.echo(f"Submitting reimbursement for ${amount:.2f}...")
-
-    expense = client.submit_reimbursement(
-        collective_slug=collective,
-        description=description,
-        amount_cents=amount_cents,
-        receipt_file=receipt,
-        tags=tags,
-    )
+    if item:
+        # Multi-item mode
+        items = []
+        for spec in item:
+            parts = spec.split("|")
+            if len(parts) < 3:
+                raise click.ClickException(
+                    f"--item must be 'desc|amount|receipt' or 'desc|amount|receipt|date'; got: {spec}"
+                )
+            items.append({
+                "description": parts[0],
+                "amount_cents": int(float(parts[1]) * 100),
+                "receipt_file": parts[2],
+                "incurred_at": parts[3] if len(parts) > 3 else incurred_at,
+            })
+        total = sum(i["amount_cents"] for i in items) / 100
+        click.echo(f"Submitting multi-item reimbursement for ${total:.2f} ({len(items)} items)...")
+        expense = client.submit_multi_item_reimbursement(
+            collective_slug=collective,
+            description=description,
+            items=items,
+            tags=tags,
+            currency=currency,
+        )
+    else:
+        if not receipt:
+            raise click.ClickException("RECEIPT arg required when --item is not used")
+        amount_cents = int(amount * 100)
+        click.echo(f"Submitting reimbursement for ${amount:.2f}...")
+        expense = client.submit_reimbursement(
+            collective_slug=collective,
+            description=description,
+            amount_cents=amount_cents,
+            receipt_file=receipt,
+            tags=tags,
+            currency=currency,
+            incurred_at=incurred_at,
+        )
     _echo_expense_created(collective, expense)
 
 
@@ -122,12 +161,14 @@ def invoice(description: str, amount: float, collective: str, invoice: str | Non
 @click.option("--pending", is_flag=True, help="Show only pending expenses")
 @click.option("--mine", is_flag=True, help="Show only my expenses")
 @click.option("-n", "--limit", default=20, help="Number of expenses to show")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON for scripting")
 @handle_errors
-def expenses(collective: str, pending: bool, mine: bool, limit: int):
+def expenses(collective: str, pending: bool, mine: bool, limit: int, as_json: bool):
     """List expenses for a collective.
 
     Example:
         oc expenses -c policyengine --pending
+        oc expenses -c policyengine --mine --json | jq ...
     """
     client = get_client()
 
@@ -139,6 +180,10 @@ def expenses(collective: str, pending: bool, mine: bool, limit: int):
         me = client.get_me()
         my_slug = me.get("slug")
         nodes = [e for e in nodes if e.get("payee", {}).get("slug") == my_slug]
+
+    if as_json:
+        click.echo(json.dumps(nodes, indent=2, default=str))
+        return
 
     if not nodes:
         click.echo("No expenses found.")
@@ -154,13 +199,14 @@ def expenses(collective: str, pending: bool, mine: bool, limit: int):
     click.echo(f"Found {len(nodes)} expense(s):\n")
     for exp in nodes:
         amount = exp.get("amount", 0) / 100
+        currency = exp.get("currency", "USD")
         status = exp.get("status", "UNKNOWN")
         desc = exp.get("description", "No description")
         legacy_id = exp.get("legacyId", "?")
         payee = exp.get("payee", {}).get("name", "Unknown")
         icon = status_icons.get(status, "?")
 
-        click.echo(f"  {icon} #{legacy_id} ${amount:.2f} - {desc}")
+        click.echo(f"  {icon} #{legacy_id} {currency} {amount:,.2f} - {desc}")
         click.echo(f"     Payee: {payee} | Status: {status}")
         click.echo()
 
@@ -180,15 +226,43 @@ def delete(expense_id: str):
 
 
 @cli.command()
-@click.argument("expense_id")
+@click.argument("expense_id", required=False)
+@click.option("-c", "--collective", help="Collective slug (required with --all-mine)")
+@click.option("--all-mine", is_flag=True,
+              help="Approve all PENDING expenses payable to me")
 @handle_errors
-def approve(expense_id: str):
+def approve(expense_id: str | None, collective: str | None, all_mine: bool):
     """Approve a pending expense (requires admin permissions).
 
-    Example:
+    Single:
         oc approve abc123-def456
+
+    Bulk approve all your pending:
+        oc approve --all-mine -c policyengine
     """
     client = get_client()
+    if all_mine:
+        if not collective:
+            raise click.ClickException("--all-mine requires -c/--collective")
+        me = client.get_me()
+        my_slug = me["slug"]
+        result = client.get_expenses(collective, status="PENDING", limit=100)
+        mine = [e for e in result.get("nodes", []) if e.get("payee", {}).get("slug") == my_slug]
+        click.echo(f"Found {len(mine)} PENDING expense(s) payable to @{my_slug}")
+        ok, fail = 0, 0
+        for exp in mine:
+            try:
+                client.approve_expense(exp["legacyId"])
+                click.echo(f"  \u2713 #{exp['legacyId']}: {exp['description'][:70]}")
+                ok += 1
+            except Exception as e:
+                click.echo(f"  \u2717 #{exp['legacyId']}: {e}", err=True)
+                fail += 1
+        click.echo(f"\nApproved {ok}, failed {fail}.")
+        return
+
+    if not expense_id:
+        raise click.ClickException("EXPENSE_ID required (or use --all-mine)")
     result = client.approve_expense(expense_id)
     click.echo(f"\u2713 Approved expense #{result.get('legacyId')}")
     click.echo(f"  Status: {result.get('status')}")
@@ -226,13 +300,50 @@ def me():
 
 
 @cli.command()
+@click.argument("personal_token", required=False)
+@handle_errors
+def login(personal_token: str | None):
+    """Save a Personal Token (easiest auth — recommended).
+
+    Create one at https://opencollective.com/applications (Personal Tokens tab,
+    "expenses" scope). Then either:
+
+        oc login abc123deadbeef...      # inline
+        oc login                        # interactive prompt
+    """
+    if not personal_token:
+        personal_token = click.prompt(
+            "Paste Personal Token (from opencollective.com/applications)",
+            hide_input=True,
+        ).strip()
+
+    if not (len(personal_token) == 40 and all(c in "0123456789abcdef" for c in personal_token)):
+        click.echo(
+            "\u26a0  Token doesn't look like a 40-char hex Personal Token.\n"
+            "   Saving anyway, but you may need 'oc auth' if it's an OAuth JWT.",
+            err=True,
+        )
+
+    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+    with open(TOKEN_FILE, "w") as f:
+        json.dump({"access_token": personal_token, "token_type": "PersonalToken"}, f)
+    os.chmod(TOKEN_FILE, 0o600)
+
+    client = OpenCollectiveClient(access_token=personal_token)
+    me_data = client.get_me()
+    click.echo(f"\u2713 Saved to {TOKEN_FILE}")
+    click.echo(f"  Logged in as: {me_data.get('name')} (@{me_data.get('slug')})")
+
+
+@cli.command()
 @click.option("--client-id", prompt=True, help="OAuth2 client ID")
 @click.option("--client-secret", prompt=True, hide_input=True, help="OAuth2 secret")
 @handle_errors
 def auth(client_id: str, client_secret: str):
-    """Authenticate with OpenCollective OAuth2.
+    """Authenticate with OpenCollective OAuth2 (for app integrations).
 
-    Get credentials at: https://opencollective.com/applications
+    For personal use, prefer 'oc login' with a Personal Token instead.
+    Get OAuth credentials at https://opencollective.com/applications.
     """
     from .auth import OAuth2Handler
 

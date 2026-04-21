@@ -100,13 +100,18 @@ class OpenCollectiveClient:
         if not access_token:
             raise ValueError("access_token is required")
         self.access_token = access_token
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            }
+        # Personal Tokens are 40-char hex; OAuth access tokens are JWTs (contain dots)
+        self._is_personal_token = (
+            len(access_token) == 40 and all(c in "0123456789abcdef" for c in access_token)
         )
+        self._session = requests.Session()
+        headers = {"Content-Type": "application/json"}
+        if self._is_personal_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+            headers["Personal-Token"] = access_token
+        else:
+            headers["Authorization"] = f"Bearer {access_token}"
+        self._session.headers.update(headers)
 
     @classmethod
     def from_token_file(cls, path: str | None = None) -> "OpenCollectiveClient":
@@ -213,6 +218,8 @@ class OpenCollectiveClient:
             }
 
             headers = {"Authorization": f"Bearer {self.access_token}"}
+            if self._is_personal_token:
+                headers["Personal-Token"] = self.access_token
             response = requests.post(UPLOAD_API_URL, files=files, headers=headers)
             response.raise_for_status()
 
