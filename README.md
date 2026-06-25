@@ -189,6 +189,11 @@ oc invoice "January Consulting" 5000.00 -c policyengine
 oc expenses -c policyengine --pending
 oc expenses -c policyengine --mine
 
+# Edit an expense
+oc edit 295107 --description "NYC Axiom trip" -t travel -t meals
+oc add-item 295107 "Hotel" 320.00 hotel.pdf --incurred-at 2026-04-02
+oc remove-item 295107 --index 1
+
 # Delete an expense
 oc delete abc123-def456
 
