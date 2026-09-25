@@ -1,5 +1,6 @@
 """Tests for OpenCollective client."""
 
+import json
 import os
 import tempfile
 from io import BytesIO
@@ -1197,6 +1198,30 @@ class TestApproveExpenseByLegacyId:
         assert result["status"] == "APPROVED"
 
     @responses.activate
+    def test_approve_by_legacy_id_string(self, client):
+        """Can approve expense using legacy ID passed as a string."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "processExpense": {
+                        "id": "exp-abc",
+                        "legacyId": 295107,
+                        "status": "APPROVED",
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.approve_expense("295107")
+
+        assert result["status"] == "APPROVED"
+        body = json.loads(responses.calls[0].request.body.decode())
+        assert body["variables"]["expense"] == {"legacyId": 295107}
+
+    @responses.activate
     def test_reject_by_legacy_id(self, client):
         """Can reject expense using legacy ID."""
         responses.add(
@@ -1275,6 +1300,368 @@ class TestGetExpense:
 
         result = client.get_expense(999999)
         assert result is None
+
+
+class TestEditExpense:
+    """Tests for edit_expense."""
+
+    @responses.activate
+    def test_edit_expense_by_legacy_id(self, client):
+        """Can edit an expense using its numeric legacy ID."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "Old description",
+                        "amount": 55952,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "createdAt": "2026-04-24T00:00:00Z",
+                        "payee": {"name": "Max Ghenis", "slug": "max-ghenis"},
+                        "createdByAccount": {
+                            "name": "Max Ghenis",
+                            "slug": "max-ghenis",
+                        },
+                        "tags": ["old"],
+                        "items": [],
+                    }
+                }
+            },
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "editExpense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "NYC Axiom trip",
+                        "amount": 55952,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "tags": ["travel", "axiom"],
+                        "items": [],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.edit_expense(
+            295107,
+            description="NYC Axiom trip",
+            tags=["travel", "axiom"],
+        )
+
+        assert result["description"] == "NYC Axiom trip"
+        body = json.loads(responses.calls[1].request.body.decode())
+        assert body["variables"]["expense"] == {
+            "id": "exp-public",
+            "description": "NYC Axiom trip",
+            "tags": ["travel", "axiom"],
+        }
+
+    @responses.activate
+    def test_edit_expense_by_public_id_does_not_lookup(self, client):
+        """Editing with a public ID goes straight to editExpense."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "editExpense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "Updated",
+                        "amount": 1000,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "tags": [],
+                        "items": [],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.edit_expense("exp-public", description="Updated")
+
+        assert result["legacyId"] == 295107
+        assert len(responses.calls) == 1
+        body = json.loads(responses.calls[0].request.body.decode())
+        assert body["variables"]["expense"]["id"] == "exp-public"
+
+    def test_edit_expense_requires_changes(self, client):
+        """edit_expense requires at least one field to edit."""
+        with pytest.raises(ValueError, match="No expense fields"):
+            client.edit_expense("exp-public")
+
+
+class TestAddExpenseItem:
+    """Tests for add_expense_item."""
+
+    @responses.activate
+    def test_add_expense_item_by_legacy_id(self, client):
+        """Can append one uploaded receipt item to an existing expense."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "NYC Axiom trip",
+                        "amount": 55952,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "createdAt": "2026-04-24T00:00:00Z",
+                        "payee": {"name": "Max Ghenis", "slug": "max-ghenis"},
+                        "createdByAccount": {
+                            "name": "Max Ghenis",
+                            "slug": "max-ghenis",
+                        },
+                        "tags": ["travel"],
+                        "items": [
+                            {
+                                "id": "item-train",
+                                "description": "Amtrak outbound",
+                                "amount": 13600,
+                                "url": "https://example.com/train.pdf",
+                                "incurredAt": "2026-04-23T00:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            UPLOAD_URL,
+            json={
+                "data": {
+                    "uploadFile": [
+                        {
+                            "file": {
+                                "id": "file-taxi",
+                                "url": "https://example.com/taxi.pdf",
+                            }
+                        }
+                    ]
+                }
+            },
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "editExpense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "NYC Axiom trip",
+                        "amount": 57822,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "tags": ["travel"],
+                        "items": [
+                            {
+                                "id": "item-train",
+                                "description": "Amtrak outbound",
+                                "amount": 13600,
+                                "url": "https://example.com/train.pdf",
+                                "incurredAt": "2026-04-23T00:00:00Z",
+                            },
+                            {
+                                "id": "item-taxi",
+                                "description": "Taxi",
+                                "amount": 1870,
+                                "url": "https://example.com/taxi.pdf",
+                                "incurredAt": "2026-04-25T00:00:00Z",
+                            },
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"taxi receipt")
+            temp_path = f.name
+
+        try:
+            result = client.add_expense_item(
+                295107,
+                description="Taxi",
+                amount_cents=1870,
+                receipt_file=temp_path,
+                incurred_at="2026-04-25",
+            )
+        finally:
+            os.unlink(temp_path)
+
+        assert result["expense"]["legacyId"] == 295107
+        assert result["added_item"]["url"] == "https://example.com/taxi.pdf"
+        edit_body = json.loads(responses.calls[2].request.body.decode())
+        items = edit_body["variables"]["expense"]["items"]
+        assert items == [
+            {
+                "id": "item-train",
+                "description": "Amtrak outbound",
+                "url": "https://example.com/train.pdf",
+                "incurredAt": "2026-04-23T00:00:00Z",
+                "amount": 13600,
+            },
+            {
+                "description": "Taxi",
+                "url": "https://example.com/taxi.pdf",
+                "incurredAt": "2026-04-25T00:00:00Z",
+                "amount": 1870,
+            },
+        ]
+
+
+class TestRemoveExpenseItem:
+    """Tests for remove_expense_item."""
+
+    @responses.activate
+    def test_remove_expense_item_by_index(self, client):
+        """Can remove one item from a multi-item expense by index."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "NYC Axiom trip",
+                        "amount": 55952,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "createdAt": "2026-04-24T00:00:00Z",
+                        "payee": {"name": "Max Ghenis", "slug": "max-ghenis"},
+                        "createdByAccount": {
+                            "name": "Max Ghenis",
+                            "slug": "max-ghenis",
+                        },
+                        "tags": ["travel"],
+                        "items": [
+                            {
+                                "id": "item-train",
+                                "description": "Amtrak outbound",
+                                "amount": 13600,
+                                "url": "https://example.com/train.pdf",
+                                "incurredAt": "2026-04-23T00:00:00Z",
+                            },
+                            {
+                                "id": "item-hotel",
+                                "description": "Hotel",
+                                "amount": 17418,
+                                "url": "https://example.com/hotel.pdf",
+                                "incurredAt": "2026-04-24T00:00:00Z",
+                            },
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "editExpense": {
+                        "id": "exp-public",
+                        "legacyId": 295107,
+                        "description": "NYC Axiom trip",
+                        "amount": 42352,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "tags": ["travel"],
+                        "items": [
+                            {
+                                "id": "item-hotel",
+                                "description": "Hotel",
+                                "amount": 17418,
+                                "url": "https://example.com/hotel.pdf",
+                                "incurredAt": "2026-04-24T00:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        result = client.remove_expense_item(295107, item_index=1)
+
+        assert result["removed_item"]["id"] == "item-train"
+        assert result["expense"]["amount"] == 42352
+        body = json.loads(responses.calls[1].request.body.decode())
+        items = body["variables"]["expense"]["items"]
+        assert items == [
+            {
+                "id": "item-hotel",
+                "description": "Hotel",
+                "url": "https://example.com/hotel.pdf",
+                "incurredAt": "2026-04-24T00:00:00Z",
+                "amount": 17418,
+            }
+        ]
+
+    @responses.activate
+    def test_remove_expense_item_requires_exact_description_match(self, client):
+        """A substring selector must match exactly one item."""
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expense": {
+                        "id": "exp-public",
+                        "legacyId": 100,
+                        "description": "Meals",
+                        "amount": 3000,
+                        "currency": "USD",
+                        "type": "RECEIPT",
+                        "status": "PENDING",
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "payee": {"name": "Max Ghenis", "slug": "max-ghenis"},
+                        "createdByAccount": {
+                            "name": "Max Ghenis",
+                            "slug": "max-ghenis",
+                        },
+                        "tags": [],
+                        "items": [
+                            {"id": "item-1", "description": "Lunch", "amount": 1000},
+                            {"id": "item-2", "description": "Lunch tip", "amount": 500},
+                        ],
+                    }
+                }
+            },
+            status=200,
+        )
+
+        with pytest.raises(ValueError, match="matched 2 items"):
+            client.remove_expense_item(100, description_contains="lunch")
 
 
 class TestGetExpensesCreatedBy:

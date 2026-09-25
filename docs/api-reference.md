@@ -72,6 +72,87 @@ pending = client.get_pending_expenses("policyengine")
 
 ---
 
+#### get_expense
+
+Get a single expense by its legacy numeric ID.
+
+```python
+expense = client.get_expense(295107)
+```
+
+**Parameters:**
+- `legacy_id` (int): The expense's legacy numeric ID
+
+**Returns:** Expense object, or `None` if not found
+
+---
+
+#### edit_expense
+
+Edit basic fields on an existing expense.
+
+```python
+result = client.edit_expense(
+    295107,
+    description="NYC Axiom trip",
+    tags=["travel", "meals"],
+)
+```
+
+**Parameters:**
+- `expense_id` (str | int): The expense public ID or legacy numeric ID
+- `description` (str, optional): New expense description
+- `tags` (list[str], optional): Replacement list of tags
+- `currency` (str, optional): Currency code
+- `items` (list[dict], optional): Replacement list of expense items
+
+**Returns:** Updated expense object
+
+---
+
+#### add_expense_item
+
+Add one receipt line item to an existing expense.
+
+```python
+result = client.add_expense_item(
+    295107,
+    description="Hotel",
+    amount_cents=32000,
+    receipt_file="hotel.pdf",
+    incurred_at="2026-04-02",
+)
+```
+
+**Parameters:**
+- `expense_id` (str | int): The expense public ID or legacy numeric ID
+- `description` (str): Description of the new line item
+- `amount_cents` (int): Amount in cents for the new item
+- `receipt_file` (str): Path to the receipt file
+- `incurred_at` (str, optional): Date incurred
+
+**Returns:** Dict with `expense`, `added_item`, and `items`
+
+---
+
+#### remove_expense_item
+
+Remove one line item from an existing multi-item expense.
+
+```python
+result = client.remove_expense_item(295107, item_index=1)
+```
+
+**Parameters:**
+- `expense_id` (str | int): The expense public ID or legacy numeric ID
+- `item_id` (str, optional): Remove by OpenCollective item ID
+- `item_index` (int, optional): Remove by 1-based item index
+- `description_contains` (str, optional): Remove by case-insensitive description substring
+
+**Returns:** Dict with `expense`, `removed_item`, and `remaining_items`
+
+---
+
 #### approve_expense
 
 Approve a pending expense.
@@ -81,7 +162,7 @@ result = client.approve_expense("expense_id")
 ```
 
 **Parameters:**
-- `expense_id` (str): The expense ID (not legacy ID)
+- `expense_id` (str | int): The expense public ID or legacy numeric ID
 
 **Returns:** Updated expense object
 
@@ -96,7 +177,7 @@ result = client.reject_expense("expense_id", message="Invalid receipt")
 ```
 
 **Parameters:**
-- `expense_id` (str): The expense ID
+- `expense_id` (str | int): The expense public ID or legacy numeric ID
 - `message` (str, optional): Rejection message
 
 **Returns:** Updated expense object

@@ -4,6 +4,7 @@ import functools
 import json
 import os
 import sys
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import click
 
@@ -46,6 +47,22 @@ def _echo_expense_created(collective: str, expense: dict) -> None:
     click.echo(f"  View: https://opencollective.com/{collective}/expenses/{legacy_id}")
 
 
+def _parse_amount_cents(amount: str | float | int) -> int:
+    """Parse a user-facing decimal amount into cents."""
+    try:
+        dollars = Decimal(str(amount))
+        if not dollars.is_finite():
+            raise InvalidOperation
+        return int((dollars * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except InvalidOperation as exc:
+        raise click.ClickException(f"Invalid amount: {amount}") from exc
+
+
+def _format_cents(amount_cents: int) -> str:
+    """Format cents as a dollars-and-cents string."""
+    return f"{amount_cents / 100:.2f}"
+
+
 @click.group()
 @click.version_option()
 def cli():
@@ -55,7 +72,7 @@ def cli():
 
 @cli.command()
 @click.argument("description")
-@click.argument("amount", type=float)
+@click.argument("amount")
 @click.argument("receipt", type=click.Path(exists=True), required=False)
 @click.option(
     "-c", "--collective", required=True, help="Collective slug (e.g., policyengine)"
@@ -63,12 +80,26 @@ def cli():
 @click.option("-t", "--tag", multiple=True, help="Tags for the expense")
 @click.option("--currency", help="Currency code (e.g., GBP). Defaults to collective's.")
 @click.option("--incurred-at", help="Date incurred (YYYY-MM-DD). Defaults to today.")
-@click.option("-i", "--item", multiple=True,
-              help='Multi-item: pass multiple times as "description|amount|receipt_file|YYYY-MM-DD"')
+@click.option(
+    "-i",
+    "--item",
+    multiple=True,
+    help=(
+        "Multi-item: pass multiple times as "
+        '"description|amount|receipt_file|YYYY-MM-DD"'
+    ),
+)
 @handle_errors
-def reimbursement(description: str, amount: float, receipt: str | None,
-                  collective: str, tag, currency: str | None,
-                  incurred_at: str | None, item):
+def reimbursement(
+    description: str,
+    amount: str,
+    receipt: str | None,
+    collective: str,
+    tag,
+    currency: str | None,
+    incurred_at: str | None,
+    item,
+):
     """Submit a reimbursement expense with one or more receipts.
 
     Single-item:
@@ -89,16 +120,22 @@ def reimbursement(description: str, amount: float, receipt: str | None,
             parts = spec.split("|")
             if len(parts) < 3:
                 raise click.ClickException(
-                    f"--item must be 'desc|amount|receipt' or 'desc|amount|receipt|date'; got: {spec}"
+                    "--item must be 'desc|amount|receipt' or "
+                    f"'desc|amount|receipt|date'; got: {spec}"
                 )
-            items.append({
-                "description": parts[0],
-                "amount_cents": int(float(parts[1]) * 100),
-                "receipt_file": parts[2],
-                "incurred_at": parts[3] if len(parts) > 3 else incurred_at,
-            })
-        total = sum(i["amount_cents"] for i in items) / 100
-        click.echo(f"Submitting multi-item reimbursement for ${total:.2f} ({len(items)} items)...")
+            items.append(
+                {
+                    "description": parts[0],
+                    "amount_cents": _parse_amount_cents(parts[1]),
+                    "receipt_file": parts[2],
+                    "incurred_at": parts[3] if len(parts) > 3 else incurred_at,
+                }
+            )
+        total_cents = sum(i["amount_cents"] for i in items)
+        click.echo(
+            f"Submitting multi-item reimbursement for ${_format_cents(total_cents)} "
+            f"({len(items)} items)..."
+        )
         expense = client.submit_multi_item_reimbursement(
             collective_slug=collective,
             description=description,
@@ -109,8 +146,8 @@ def reimbursement(description: str, amount: float, receipt: str | None,
     else:
         if not receipt:
             raise click.ClickException("RECEIPT arg required when --item is not used")
-        amount_cents = int(amount * 100)
-        click.echo(f"Submitting reimbursement for ${amount:.2f}...")
+        amount_cents = _parse_amount_cents(amount)
+        click.echo(f"Submitting reimbursement for ${_format_cents(amount_cents)}...")
         expense = client.submit_reimbursement(
             collective_slug=collective,
             description=description,
@@ -125,24 +162,24 @@ def reimbursement(description: str, amount: float, receipt: str | None,
 
 @cli.command()
 @click.argument("description")
-@click.argument("amount", type=float)
+@click.argument("amount")
 @click.option(
     "-c", "--collective", required=True, help="Collective slug (e.g., policyengine)"
 )
 @click.option("-i", "--invoice", type=click.Path(exists=True), help="Invoice file")
 @click.option("-t", "--tag", multiple=True, help="Tags for the expense")
 @handle_errors
-def invoice(description: str, amount: float, collective: str, invoice: str | None, tag):
+def invoice(description: str, amount: str, collective: str, invoice: str | None, tag):
     """Submit an invoice expense.
 
     Example:
         oc invoice "January Consulting" 5000.00 -c policyengine
     """
     client = get_client()
-    amount_cents = int(amount * 100)
+    amount_cents = _parse_amount_cents(amount)
     tags = list(tag) if tag else None
 
-    click.echo(f"Submitting invoice for ${amount:.2f}...")
+    click.echo(f"Submitting invoice for ${_format_cents(amount_cents)}...")
 
     expense = client.submit_invoice(
         collective_slug=collective,
@@ -213,6 +250,125 @@ def expenses(collective: str, pending: bool, mine: bool, limit: int, as_json: bo
 
 @cli.command()
 @click.argument("expense_id")
+@click.option("--description", help="New expense description")
+@click.option("-t", "--tag", multiple=True, help="Replacement tags for the expense")
+@click.option("--clear-tags", is_flag=True, help="Remove all tags from the expense")
+@click.option("--currency", help="New currency code")
+@handle_errors
+def edit(
+    expense_id: str,
+    description: str | None,
+    tag,
+    clear_tags: bool,
+    currency: str | None,
+):
+    """Edit basic fields on an existing expense.
+
+    Example:
+        oc edit 295107 --description "NYC Axiom trip" -t travel -t meals
+    """
+    if clear_tags and tag:
+        raise click.ClickException("Use either --clear-tags or --tag, not both")
+
+    tags = [] if clear_tags else list(tag) if tag else None
+    if description is None and tags is None and currency is None:
+        raise click.ClickException(
+            "Nothing to edit; pass --description, --tag/--clear-tags, or --currency"
+        )
+
+    client = get_client()
+    result = client.edit_expense(
+        expense_id,
+        description=description,
+        tags=tags,
+        currency=currency,
+    )
+    click.echo(f"\u2713 Updated expense #{result.get('legacyId')}")
+    click.echo(f"  Status: {result.get('status')}")
+
+
+@cli.command("add-item")
+@click.argument("expense_id")
+@click.argument("description")
+@click.argument("amount")
+@click.argument("receipt", type=click.Path(exists=True))
+@click.option("--incurred-at", help="Date incurred (YYYY-MM-DD). Defaults to today.")
+@handle_errors
+def add_item(
+    expense_id: str,
+    description: str,
+    amount: str,
+    receipt: str,
+    incurred_at: str | None,
+):
+    """Add one receipt line item to an existing expense.
+
+    Example:
+        oc add-item 295107 "Hotel" 320.00 hotel.pdf --incurred-at 2026-04-02
+    """
+    amount_cents = _parse_amount_cents(amount)
+    click.echo(
+        f"Adding item to expense {expense_id} for ${_format_cents(amount_cents)}..."
+    )
+
+    client = get_client()
+    result = client.add_expense_item(
+        expense_id,
+        description=description,
+        amount_cents=amount_cents,
+        receipt_file=receipt,
+        incurred_at=incurred_at,
+    )
+    expense = result["expense"]
+    added = result["added_item"]
+    click.echo(f"\u2713 Added item to expense #{expense.get('legacyId')}")
+    click.echo(f"  Added: ${_format_cents(added['amount'])} - {added['description']}")
+    click.echo(f"  Total items: {len(result['items'])}")
+
+
+@cli.command("remove-item")
+@click.argument("expense_id")
+@click.option("--item-id", help="Remove item by OpenCollective item ID")
+@click.option("--index", "item_index", type=int, help="Remove item by 1-based index")
+@click.option(
+    "--contains",
+    "description_contains",
+    help="Remove item whose description contains this text",
+)
+@handle_errors
+def remove_item(
+    expense_id: str,
+    item_id: str | None,
+    item_index: int | None,
+    description_contains: str | None,
+):
+    """Remove one line item from an existing multi-item expense.
+
+    Example:
+        oc remove-item 295107 --index 1
+    """
+    if sum(v is not None for v in (item_id, item_index, description_contains)) != 1:
+        raise click.ClickException(
+            "Provide exactly one selector: --item-id, --index, or --contains"
+        )
+
+    client = get_client()
+    result = client.remove_expense_item(
+        expense_id,
+        item_id=item_id,
+        item_index=item_index,
+        description_contains=description_contains,
+    )
+    expense = result["expense"]
+    removed = result["removed_item"]
+    amount = _format_cents(removed.get("amount", 0))
+    click.echo(f"\u2713 Removed item from expense #{expense.get('legacyId')}")
+    click.echo(f"  Removed: ${amount} - {removed.get('description')}")
+    click.echo(f"  Remaining items: {len(result['remaining_items'])}")
+
+
+@cli.command()
+@click.argument("expense_id")
 @handle_errors
 def delete(expense_id: str):
     """Delete an expense (draft/pending only).
@@ -228,8 +384,9 @@ def delete(expense_id: str):
 @cli.command()
 @click.argument("expense_id", required=False)
 @click.option("-c", "--collective", help="Collective slug (required with --all-mine)")
-@click.option("--all-mine", is_flag=True,
-              help="Approve all PENDING expenses payable to me")
+@click.option(
+    "--all-mine", is_flag=True, help="Approve all PENDING expenses payable to me"
+)
 @handle_errors
 def approve(expense_id: str | None, collective: str | None, all_mine: bool):
     """Approve a pending expense (requires admin permissions).
@@ -247,7 +404,11 @@ def approve(expense_id: str | None, collective: str | None, all_mine: bool):
         me = client.get_me()
         my_slug = me["slug"]
         result = client.get_expenses(collective, status="PENDING", limit=100)
-        mine = [e for e in result.get("nodes", []) if e.get("payee", {}).get("slug") == my_slug]
+        mine = [
+            e
+            for e in result.get("nodes", [])
+            if e.get("payee", {}).get("slug") == my_slug
+        ]
         click.echo(f"Found {len(mine)} PENDING expense(s) payable to @{my_slug}")
         ok, fail = 0, 0
         for exp in mine:
@@ -317,7 +478,10 @@ def login(personal_token: str | None):
             hide_input=True,
         ).strip()
 
-    if not (len(personal_token) == 40 and all(c in "0123456789abcdef" for c in personal_token)):
+    if not (
+        len(personal_token) == 40
+        and all(c in "0123456789abcdef" for c in personal_token)
+    ):
         click.echo(
             "\u26a0  Token doesn't look like a 40-char hex Personal Token.\n"
             "   Saving anyway, but you may need 'oc auth' if it's an OAuth JWT.",

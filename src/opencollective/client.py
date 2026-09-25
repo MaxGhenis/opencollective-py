@@ -101,8 +101,8 @@ class OpenCollectiveClient:
             raise ValueError("access_token is required")
         self.access_token = access_token
         # Personal Tokens are 40-char hex; OAuth access tokens are JWTs (contain dots)
-        self._is_personal_token = (
-            len(access_token) == 40 and all(c in "0123456789abcdef" for c in access_token)
+        self._is_personal_token = len(access_token) == 40 and all(
+            c in "0123456789abcdef" for c in access_token
         )
         self._session = requests.Session()
         headers = {"Content-Type": "application/json"}
@@ -357,6 +357,229 @@ class OpenCollectiveClient:
         data = self._request(query, {"id": legacy_id})
         return data.get("expense")
 
+    def _resolve_expense_public_id(self, expense_id: str | int) -> str:
+        """Resolve an expense legacy ID or public ID to the public ID."""
+        if isinstance(expense_id, int) or str(expense_id).isdigit():
+            expense = self.get_expense(int(expense_id))
+            if not expense:
+                raise ValueError(f"Expense not found: {expense_id}")
+            return expense["id"]
+        return str(expense_id)
+
+    def _get_expense_by_reference(self, expense_id: str | int) -> dict | None:
+        """Get an expense by legacy ID or public ID."""
+        if isinstance(expense_id, int) or str(expense_id).isdigit():
+            return self.get_expense(int(expense_id))
+
+        query = """
+        query GetExpenseByPublicId($id: String!) {
+            expense(expense: { id: $id }) {
+                id
+                legacyId
+                description
+                amount
+                currency
+                type
+                status
+                createdAt
+                payee { name slug }
+                createdByAccount { name slug }
+                tags
+                items { id description amount url incurredAt }
+            }
+        }
+        """
+        data = self._request(query, {"id": str(expense_id)})
+        return data.get("expense")
+
+    def _format_expense_item_update(self, item: dict) -> dict:
+        """Format an existing expense item for ExpenseItemInput."""
+        item_input = {}
+        for field in ("id", "description", "url", "incurredAt"):
+            if item.get(field) is not None:
+                item_input[field] = item[field]
+
+        if item.get("amount") is not None:
+            item_input["amount"] = item["amount"]
+        elif item.get("amount_cents") is not None:
+            item_input["amount"] = item["amount_cents"]
+        elif item.get("amountV2") is not None:
+            item_input["amountV2"] = item["amountV2"]
+
+        return item_input
+
+    def edit_expense(
+        self,
+        expense_id: str | int,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        currency: str | None = None,
+        items: list[dict] | None = None,
+    ) -> dict:
+        """Edit an existing expense.
+
+        Args:
+            expense_id: The expense public ID or legacy numeric ID.
+            description: Optional new expense description.
+            tags: Optional replacement list of tags.
+            currency: Optional currency code.
+            items: Optional replacement list of expense items.
+
+        Returns:
+            Updated expense data.
+        """
+        if description is None and tags is None and currency is None and items is None:
+            raise ValueError("No expense fields provided to edit")
+
+        mutation = """
+        mutation EditExpense($expense: ExpenseUpdateInput!) {
+            editExpense(expense: $expense) {
+                id
+                legacyId
+                description
+                amount
+                currency
+                type
+                status
+                tags
+                items { id description amount url incurredAt }
+            }
+        }
+        """
+        expense_input: dict[str, Any] = {
+            "id": self._resolve_expense_public_id(expense_id)
+        }
+        if description is not None:
+            expense_input["description"] = description
+        if tags is not None:
+            expense_input["tags"] = tags
+        if currency is not None:
+            expense_input["currency"] = currency
+        if items is not None:
+            expense_input["items"] = [
+                self._format_expense_item_update(item) for item in items
+            ]
+
+        data = self._request(mutation, {"expense": expense_input})
+        return data.get("editExpense", {})
+
+    def remove_expense_item(
+        self,
+        expense_id: str | int,
+        item_id: str | None = None,
+        item_index: int | None = None,
+        description_contains: str | None = None,
+    ) -> dict:
+        """Remove one item from an existing multi-item expense.
+
+        Exactly one selector must be provided: item_id, 1-based item_index, or
+        a case-insensitive description substring.
+
+        Args:
+            expense_id: The expense public ID or legacy numeric ID.
+            item_id: Public ID of the item to remove.
+            item_index: 1-based index of the item to remove.
+            description_contains: Case-insensitive description substring.
+
+        Returns:
+            Dict with the updated expense, removed item, and remaining items.
+        """
+        selectors = [
+            item_id is not None,
+            item_index is not None,
+            description_contains is not None,
+        ]
+        if sum(selectors) != 1:
+            raise ValueError(
+                "Provide exactly one item selector: item_id, item_index, "
+                "or description_contains"
+            )
+
+        expense = self._get_expense_by_reference(expense_id)
+        if not expense:
+            raise ValueError(f"Expense not found: {expense_id}")
+
+        items = expense.get("items", [])
+        if len(items) <= 1:
+            raise ValueError("Cannot remove the only item from an expense")
+
+        if item_id is not None:
+            matches = [item for item in items if str(item.get("id")) == str(item_id)]
+        elif item_index is not None:
+            if item_index < 1 or item_index > len(items):
+                raise ValueError(
+                    f"Item index {item_index} is out of range; expense has "
+                    f"{len(items)} item(s)"
+                )
+            matches = [items[item_index - 1]]
+        else:
+            needle = description_contains.lower()
+            matches = [
+                item
+                for item in items
+                if needle in (item.get("description") or "").lower()
+            ]
+
+        if not matches:
+            raise ValueError("No matching expense item found")
+        if len(matches) > 1:
+            raise ValueError(
+                f"Item selector matched {len(matches)} items; use item_id or "
+                "item_index instead"
+            )
+
+        removed = matches[0]
+        remaining_items = [item for item in items if item is not removed]
+        updated = self.edit_expense(expense["id"], items=remaining_items)
+        return {
+            "expense": updated,
+            "removed_item": removed,
+            "remaining_items": remaining_items,
+        }
+
+    def add_expense_item(
+        self,
+        expense_id: str | int,
+        description: str,
+        amount_cents: int,
+        receipt_file: str,
+        incurred_at: str | None = None,
+    ) -> dict:
+        """Add one line item with a receipt to an existing expense.
+
+        Args:
+            expense_id: The expense public ID or legacy numeric ID.
+            description: Description of the new line item.
+            amount_cents: Amount in cents for the new item.
+            receipt_file: Path to the receipt file (PDF, PNG, JPG, or HTML).
+                HTML files are automatically converted to PDF.
+            incurred_at: Optional date the expense was incurred (ISO format,
+                e.g., "2026-01-31").
+
+        Returns:
+            Dict with the updated expense, added item, and full item list.
+        """
+        expense = self._get_expense_by_reference(expense_id)
+        if not expense:
+            raise ValueError(f"Expense not found: {expense_id}")
+
+        receipt_url = self._upload_expense_item_file(receipt_file)
+        new_item: dict[str, Any] = {
+            "description": description,
+            "amount": amount_cents,
+            "url": receipt_url,
+        }
+        if incurred_at:
+            new_item["incurredAt"] = _ensure_iso_datetime(incurred_at)
+
+        updated_items = list(expense.get("items") or []) + [new_item]
+        updated = self.edit_expense(expense["id"], items=updated_items)
+        return {
+            "expense": updated,
+            "added_item": new_item,
+            "items": updated_items,
+        }
+
     def approve_expense(self, expense_id: str | int) -> dict:
         """Approve a pending expense.
 
@@ -407,8 +630,8 @@ class OpenCollectiveClient:
             }
         }
         """
-        if isinstance(expense_id, int):
-            expense_ref = {"legacyId": expense_id}
+        if isinstance(expense_id, int) or str(expense_id).isdigit():
+            expense_ref = {"legacyId": int(expense_id)}
         else:
             expense_ref = {"id": expense_id}
         variables = {
@@ -631,6 +854,25 @@ class OpenCollectiveClient:
         WeasyHTML(filename=html_path).write_pdf(pdf_path)
         return pdf_path
 
+    def _upload_expense_item_file(self, receipt_file: str) -> str:
+        """Upload a receipt file for use as an expense item URL."""
+        file_to_upload = receipt_file
+        temp_pdf = None
+
+        if receipt_file.lower().endswith((".html", ".htm")):
+            temp_pdf = self._convert_html_to_pdf(receipt_file)
+            file_to_upload = temp_pdf
+
+        try:
+            file_info = self.upload_file(file_to_upload, kind="EXPENSE_ITEM")
+            receipt_url = file_info.get("url")
+            if not receipt_url:
+                raise ValueError("Failed to upload receipt file")
+            return receipt_url
+        finally:
+            if temp_pdf and os.path.exists(temp_pdf):
+                os.unlink(temp_pdf)
+
     def _resolve_payee_and_payout(
         self,
         payee_slug: str | None = None,
@@ -721,37 +963,19 @@ class OpenCollectiveClient:
             payee_slug, payout_method_id
         )
 
-        # Handle HTML-to-PDF conversion and upload
-        file_to_upload = receipt_file
-        temp_pdf = None
-
-        if receipt_file.lower().endswith((".html", ".htm")):
-            temp_pdf = self._convert_html_to_pdf(receipt_file)
-            file_to_upload = temp_pdf
-
-        try:
-            file_info = self.upload_file(file_to_upload, kind="EXPENSE_ITEM")
-            receipt_url = file_info.get("url")
-
-            if not receipt_url:
-                raise ValueError("Failed to upload receipt file")
-
-            return self.create_expense(
-                collective_slug=collective_slug,
-                payee_slug=payee_slug,
-                description=description,
-                amount_cents=amount_cents,
-                payout_method_id=payout_method_id,
-                expense_type="RECEIPT",
-                tags=tags,
-                item_url=receipt_url,
-                currency=currency,
-                incurred_at=incurred_at,
-            )
-
-        finally:
-            if temp_pdf and os.path.exists(temp_pdf):
-                os.unlink(temp_pdf)
+        receipt_url = self._upload_expense_item_file(receipt_file)
+        return self.create_expense(
+            collective_slug=collective_slug,
+            payee_slug=payee_slug,
+            description=description,
+            amount_cents=amount_cents,
+            payout_method_id=payout_method_id,
+            expense_type="RECEIPT",
+            tags=tags,
+            item_url=receipt_url,
+            currency=currency,
+            incurred_at=incurred_at,
+        )
 
     def submit_multi_item_reimbursement(
         self,
@@ -819,13 +1043,7 @@ class OpenCollectiveClient:
         # Upload each item's receipt and build the expense items list
         expense_items = []
         for item in items:
-            file_info = self.upload_file(item["receipt_file"], kind="EXPENSE_ITEM")
-            receipt_url = file_info.get("url")
-            if not receipt_url:
-                raise ValueError(
-                    f"Failed to upload receipt file for item: {item['description']}"
-                )
-
+            receipt_url = self._upload_expense_item_file(item["receipt_file"])
             expense_item = {
                 "description": item["description"],
                 "amount": item["amount_cents"],

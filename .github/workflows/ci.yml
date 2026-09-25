@@ -45,6 +45,36 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[docs]"
+          npm install -g mystmd
+
+      - name: Build docs
+        run: |
+          cd docs
+          BASE_URL="/opencollective-py/" myst build --html
+
+  deploy-docs:
+    runs-on: ubuntu-latest
+    needs: docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       pages: write
@@ -79,16 +109,13 @@ jobs:
           BASE_URL="/opencollective-py/" myst build --html
 
       - name: Setup Pages
-        if: github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v4
 
       - name: Upload artifact
-        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/html
 
       - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
         id: deployment
         uses: actions/deploy-pages@v4
