@@ -32,17 +32,18 @@ pdf = [
     "weasyprint>=60.0",
 ]
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.0,<2",  # mcp 2 removed Server.list_tools(); mcp_server.py uses it
 ]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "hypothesis>=6.0",
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",
     "responses>=0.23",
     "weasyprint>=60.0",
-    "mcp>=1.0",
+    "mcp>=1.0,<2",  # mcp 2 removed Server.list_tools(); mcp_server.py uses it
 ]
 docs = [
     "myst-parser>=2.0",
