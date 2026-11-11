@@ -157,6 +157,33 @@ file_info = client.upload_file(file_obj, filename="receipt.pdf")
 
 Supported formats: PNG, JPEG, GIF, WebP, PDF, CSV
 
+## Read-only mode
+
+Set `OPENCOLLECTIVE_READ_ONLY=1` in a process that must never write to
+OpenCollective, such as an unattended job that only checks expense status.
+The client then refuses every GraphQL mutation and every file upload (creating,
+submitting, editing, approving, rejecting and deleting expenses, and adding or
+removing items) with `ReadOnlyError` before it sends anything. Queries still
+work, so `get_expenses`, `get_me` and `oc expenses` behave as usual.
+
+```python
+import os
+from opencollective import OpenCollectiveClient, ReadOnlyError
+
+os.environ["OPENCOLLECTIVE_READ_ONLY"] = "1"
+client = OpenCollectiveClient.from_token_file()
+client.get_expenses("policyengine", limit=10)   # works
+try:
+    client.approve_expense(12345)
+except ReadOnlyError as e:
+    print(e)   # ... refused mutation ProcessExpense. Queries still work.
+```
+
+The client reads the variable on every write, so setting it after building the
+client still takes effect. Any value other than empty, `0`, `false`, `no` or
+`off` turns the mode on. The CLI and the MCP server use the same client, so the
+variable covers them too.
+
 ## Get collective info
 
 ```python

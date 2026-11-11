@@ -3,7 +3,9 @@
 import json
 import mimetypes
 import os
+import re
 import tempfile
+from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import Any, BinaryIO
 
@@ -23,6 +25,52 @@ TOKEN_FILE = os.path.expanduser("~/.config/opencollective/token.json")
 # with multipart handling on the direct API endpoint.
 # See: https://github.com/opencollective/opencollective-api/issues/11293
 UPLOAD_API_URL = "https://opencollective.com/api/graphql/v2"
+
+# Read-only mode. A process that must never write to OpenCollective (for
+# example an unattended job that only checks expense status) sets
+# OPENCOLLECTIVE_READ_ONLY=1. Every write this client makes (create, submit,
+# edit, add or remove an item, approve, reject, delete) is a GraphQL mutation
+# sent through _request(), or a file upload sent through upload_file(), so the
+# check sits at those two points rather than on each public method.
+READ_ONLY_ENV = "OPENCOLLECTIVE_READ_ONLY"
+_READ_ONLY_OFF = {"", "0", "false", "no", "off"}
+# Matches the keyword anywhere, comments included. A query that merely mentions
+# the word is refused too: the check fails closed.
+_MUTATION_RE = re.compile(r"\bmutation\b", re.IGNORECASE)
+_OPERATION_NAME_RE = re.compile(r"\bmutation\s+([_A-Za-z][_0-9A-Za-z]*)", re.IGNORECASE)
+
+
+class ReadOnlyError(PermissionError):
+    """Raised for a write attempted while OPENCOLLECTIVE_READ_ONLY is set."""
+
+
+def read_only_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Return True when OPENCOLLECTIVE_READ_ONLY turns read-only mode on.
+
+    Any value other than empty, "0", "false", "no" or "off" (in any case)
+    counts as on, so a mistyped value leaves the client read-only.
+    """
+    value = (os.environ if env is None else env).get(READ_ONLY_ENV)
+    return value is not None and value.strip().lower() not in _READ_ONLY_OFF
+
+
+def _refuse_if_read_only(what: str) -> None:
+    """Raise ReadOnlyError when read-only mode is on.
+
+    Called on every write rather than once in __init__, so a client built
+    before the variable was set is covered too.
+    """
+    if read_only_enabled():
+        raise ReadOnlyError(
+            f"OpenCollective client is read-only ({READ_ONLY_ENV} is set): "
+            f"refused {what}. Queries still work."
+        )
+
+
+def _mutation_label(query: str) -> str:
+    """Name a mutation for the refusal message, e.g. 'mutation ProcessExpense'."""
+    match = _OPERATION_NAME_RE.search(query)
+    return f"mutation {match.group(1)}" if match else "a GraphQL mutation"
 
 
 def _check_graphql_errors(result: dict, prefix: str = "API") -> None:
@@ -145,8 +193,12 @@ class OpenCollectiveClient:
             The data from the response.
 
         Raises:
+            ReadOnlyError: If the document holds a mutation while
+                OPENCOLLECTIVE_READ_ONLY is set. Nothing is sent.
             Exception: If the API returns an error.
         """
+        if _MUTATION_RE.search(query):
+            _refuse_if_read_only(_mutation_label(query))
         response = self._session.post(
             API_URL,
             json={"query": query, "variables": variables or {}},
@@ -177,11 +229,15 @@ class OpenCollectiveClient:
         Returns:
             Dict with file info including 'url', 'id', 'name', 'size', 'type'.
 
+        Raises:
+            ReadOnlyError: If OPENCOLLECTIVE_READ_ONLY is set. Nothing is sent.
+
         Example:
             >>> file_info = client.upload_file("/path/to/receipt.pdf")
             >>> print(file_info["url"])
             https://opencollective-production.s3.us-west-1.amazonaws.com/...
         """
+        _refuse_if_read_only("a file upload")
         with _open_file(file, filename) as (file_obj, resolved_name):
             mime_type = (
                 mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
