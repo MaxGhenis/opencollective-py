@@ -8,7 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import click
 
-from .client import OpenCollectiveClient
+from .client import OpenCollectiveClient, ReadOnlyError
 
 TOKEN_FILE = os.path.expanduser("~/.config/opencollective/token.json")
 
@@ -416,6 +416,8 @@ def approve(expense_id: str | None, collective: str | None, all_mine: bool):
                 client.approve_expense(exp["legacyId"])
                 click.echo(f"  \u2713 #{exp['legacyId']}: {exp['description'][:70]}")
                 ok += 1
+            except ReadOnlyError:
+                raise  # read-only mode: stop and exit 1, as a single approve does
             except Exception as e:
                 click.echo(f"  \u2717 #{exp['legacyId']}: {e}", err=True)
                 fail += 1

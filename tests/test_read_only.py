@@ -312,6 +312,42 @@ class TestCli:
         assert len(responses.calls) == 0
 
     @responses.activate
+    def test_bulk_approve_refused_with_exit_1(self, mock_token, monkeypatch):
+        """--all-mine catches per-expense errors; a read-only refusal must
+        still stop the run with exit 1 rather than report 'failed N'."""
+        monkeypatch.setattr("opencollective.cli.TOKEN_FILE", mock_token)
+        monkeypatch.setenv(ENV, "1")
+        responses.add(responses.POST, API_URL, json={"data": {"me": {"slug": "payee"}}})
+        responses.add(
+            responses.POST,
+            API_URL,
+            json={
+                "data": {
+                    "expenses": {
+                        "totalCount": 2,
+                        "nodes": [
+                            {
+                                "legacyId": 5,
+                                "description": "a",
+                                "payee": {"slug": "payee"},
+                            },
+                            {
+                                "legacyId": 6,
+                                "description": "b",
+                                "payee": {"slug": "payee"},
+                            },
+                        ],
+                    }
+                }
+            },
+        )
+        result = CliRunner().invoke(cli, ["approve", "--all-mine", "-c", "collective"])
+        assert result.exit_code == 1
+        assert "read-only" in result.output
+        sent = [json.loads(c.request.body.decode())["query"] for c in responses.calls]
+        assert len(sent) == 2 and not any(_is_mutation_doc(q) for q in sent)
+
+    @responses.activate
     def test_expenses_listing_still_works(self, mock_token, monkeypatch):
         monkeypatch.setattr("opencollective.cli.TOKEN_FILE", mock_token)
         monkeypatch.setenv(ENV, "1")
