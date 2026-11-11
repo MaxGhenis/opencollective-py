@@ -26,3 +26,10 @@ def mock_token(tmp_path):
     token_file = token_dir / "token.json"
     token_file.write_text(json.dumps({"access_token": "test_token"}))
     return str(token_file)
+
+
+@pytest.fixture(autouse=True)
+def _writes_allowed_by_default(monkeypatch):
+    """Keep tests hermetic: a developer's or CI's OPENCOLLECTIVE_READ_ONLY
+    must not turn the write tests into refusals. Read-only tests set it."""
+    monkeypatch.delenv("OPENCOLLECTIVE_READ_ONLY", raising=False)
