@@ -68,7 +68,7 @@ uv run black src/ tests/
 - Core functionality works without it
 
 ## CI/CD
-- GitHub Actions runs tests on Python 3.10–3.13
+- GitHub Actions runs tests on Python 3.11, 3.12, 3.13, and 3.15
 - Lint jobs: ruff check, black formatting
 - Known issue: `docs` job may fail (Sphinx integration still in progress)
 
